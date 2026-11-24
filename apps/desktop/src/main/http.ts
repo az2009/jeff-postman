@@ -7,6 +7,9 @@ import { performance } from 'node:perf_hooks'
 import type { Socket } from 'node:net'
 import type { HttpResponse, HttpTimings, SendInput, SendResult, SentRequest } from '@shared/types'
 import { activeBody, autoContentType, fileName, mimeFromPath, normalizeUrl, RAW_CONTENT_TYPE } from '@shared/http'
+import { applySimpleAuth, getBool, getParam } from '@shared/auth'
+import { sign, type SignatureMethod } from './oauth1'
+import type { PmAuth } from '@shared/types'
 
 const MAX_REDIRECTS = 10
 const MAX_BODY = 200 * 1024 * 1024
@@ -83,7 +86,7 @@ async function buildBody(input: SendInput): Promise<BuiltBody> {
 const escapeQuotes = (s: string) => s.replace(/"/g, '%22').replace(/\r|\n/g, ' ')
 
 /** Monta a lista final de headers: os do usuário vencem os automáticos (comparação sem caixa). */
-function buildHeaders(input: SendInput, built: BuiltBody, appVersion: string, host: string): [string, string][] {
+function buildHeaders(input: SendInput, built: BuiltBody, appVersion: string, host: string, authHeaders: [string, string][] = []): [string, string][] {
   const user = input.doc.request.header.filter((h) => !h.disabled && h.key.trim())
   const has = new Set(user.map((h) => h.key.trim().toLowerCase()))
   const out: [string, string][] = []
@@ -91,6 +94,7 @@ function buildHeaders(input: SendInput, built: BuiltBody, appVersion: string, ho
     if (v !== null && !has.has(k.toLowerCase())) out.push([k, v])
   }
   auto('Content-Type', built.contentType)
+  for (const [k, v] of authHeaders) auto(k, v)
   for (const h of user) out.push([h.key.trim(), h.value])
   auto('JeffPostman-Token', randomUUID())
   auto('Host', host)
@@ -228,7 +232,11 @@ export async function send(input: SendInput, appVersion: string): Promise<SendRe
     let url = new URL(normalizeUrl(input.doc.request.url.raw))
     let method = input.doc.request.method
     let built = await buildBody(input)
-    let headers = buildHeaders(input, built, appVersion, url.host)
+    const applied = applyAuth(input.auth, method, url, built)
+    url = applied.url
+    built = applied.built
+    const authHeaders = applied.headers
+    let headers = buildHeaders(input, built, appVersion, url.host, authHeaders)
     sent = { method, url: url.toString(), headers, bodySize: built.data?.length ?? 0 }
 
     let redirects = 0
@@ -247,7 +255,7 @@ export async function send(input: SendInput, appVersion: string): Promise<SendRe
       }
       const crossOrigin = next.host !== url.host
       url = next
-      headers = buildHeaders(input, built, appVersion, url.host).filter(([k]) => {
+      headers = buildHeaders(input, built, appVersion, url.host, crossOrigin ? [] : authHeaders).filter(([k]) => {
         const l = k.toLowerCase()
         if (!built.data && (l === 'content-type' || l === 'content-length')) return false
         if (crossOrigin && (l === 'authorization' || l === 'cookie')) return false
@@ -320,4 +328,58 @@ function describe(e: NodeJS.ErrnoException, target: string): string {
     default:
       return e.message || String(e)
   }
+}
+
+/**
+ * Aplica o auth efetivo: Basic/Bearer/API Key/OAuth 2.0 viram header ou query; OAuth 1.0 assina
+ * o método, a URL final e o corpo (form entra na assinatura; outros corpos podem levar body hash).
+ */
+function applyAuth(auth: PmAuth | undefined, method: string, url: URL, built: BuiltBody): { url: URL; built: BuiltBody; headers: [string, string][] } {
+  const out = { url, built, headers: [] as [string, string][] }
+  if (!auth || auth.type === 'noauth') return out
+  if (auth.type === 'oauth1') {
+    const isForm = (built.contentType ?? '').startsWith('application/x-www-form-urlencoded')
+    const formBody = isForm && built.data ? built.data.toString('utf8') : null
+    const r = sign(
+      {
+        consumerKey: getParam(auth, 'consumerKey'),
+        consumerSecret: getParam(auth, 'consumerSecret'),
+        token: getParam(auth, 'token'),
+        tokenSecret: getParam(auth, 'tokenSecret'),
+        signatureMethod: (getParam(auth, 'signatureMethod', 'HMAC-SHA1') || 'HMAC-SHA1') as SignatureMethod,
+        timestamp: getParam(auth, 'timestamp'),
+        nonce: getParam(auth, 'nonce'),
+        version: getParam(auth, 'version', '1.0'),
+        realm: getParam(auth, 'realm'),
+        callback: getParam(auth, 'callback'),
+        verifier: getParam(auth, 'verifier'),
+        privateKey: getParam(auth, 'privateKey'),
+        includeBodyHash: getBool(auth, 'includeBodyHash'),
+        addEmptyParamsToSign: getBool(auth, 'addEmptyParamsToSign')
+      },
+      { method, url, formBody, rawBody: isForm ? null : built.data }
+    )
+    if (getBool(auth, 'addParamsToHeader', true)) {
+      out.headers.push(['Authorization', r.header])
+    } else if (isForm || (!built.data && method !== 'GET' && method !== 'HEAD')) {
+      // parâmetros no corpo do formulário
+      const extra = new URLSearchParams(r.oauthParams).toString()
+      const data = Buffer.from(formBody ? `${formBody}&${extra}` : extra, 'utf8')
+      out.built = { data, contentType: 'application/x-www-form-urlencoded' }
+    } else {
+      const u = new URL(url.toString())
+      for (const [k, v] of r.oauthParams) u.searchParams.append(k, v)
+      out.url = u
+    }
+    return out
+  }
+  const simple = applySimpleAuth(auth)
+  if (!simple) return out
+  out.headers = simple.headers
+  if (simple.query.length) {
+    const u = new URL(url.toString())
+    for (const [k, v] of simple.query) u.searchParams.append(k, v)
+    out.url = u
+  }
+  return out
 }

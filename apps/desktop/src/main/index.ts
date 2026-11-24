@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, safeStorage, shell } from 'electron'
 import { dirname, join } from 'path'
 import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import { Repo } from './db'
@@ -44,6 +44,12 @@ app.whenReady().then(() => {
   const dbPath = join(app.getPath('userData'), 'jeff-postman.db')
   migrateFromCarteiro(dbPath)
   repo = new Repo(dbPath)
+  if (safeStorage.isEncryptionAvailable()) {
+    repo.crypt = {
+      enc: (s) => safeStorage.encryptString(s),
+      dec: (b) => safeStorage.decryptString(Buffer.from(b))
+    }
+  }
   registerIpc(repo, dbPath)
   createWindow()
 

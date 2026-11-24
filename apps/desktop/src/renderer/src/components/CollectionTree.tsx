@@ -129,6 +129,7 @@ export function CollectionTree() {
         { label: 'Add request', run: () => st().createItem(id, null, 'request') },
         { label: 'Add folder', run: () => st().createItem(id, null, 'folder') },
         { label: 'Rename', run: () => setRenaming(id) },
+        { label: 'Authorization', run: () => st().openAuthTab('collection', id) },
         { label: 'Edit variables', run: () => st().openVariables({ type: 'collection', id }) },
         { label: 'Duplicate', run: () => st().duplicateCollection(id) },
         { label: 'Run collection (fase 8)', disabled: true },
@@ -151,6 +152,7 @@ export function CollectionTree() {
       ? [
           { label: 'Add request', run: () => st().createItem(it.collectionId, it.id, 'request') },
           { label: 'Add folder', run: () => st().createItem(it.collectionId, it.id, 'folder') },
+          { label: 'Authorization', run: () => st().openAuthTab('folder', it.id) },
           ...common
         ]
       : [{ label: 'Open in tab', run: () => st().openItem(it) }, ...common]

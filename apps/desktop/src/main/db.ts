@@ -6,6 +6,10 @@ import type {
   HistoryEntry,
   HttpMethod,
   KeyValue,
+  OAuth2Token,
+  PmAuth,
+  InheritedAuth,
+  FolderDoc,
   NewItemInput,
   RequestDoc,
   TreeItem
@@ -97,6 +101,12 @@ function defaultRequest(name: string, method: HttpMethod): RequestDoc {
 
 export class Repo {
   readonly db: DB
+
+  /** cifra e decifra segredos (tokens OAuth); no app usa o safeStorage (DPAPI do Windows) */
+  crypt: { enc(s: string): Buffer; dec(b: Buffer): string } = {
+    enc: (s) => Buffer.from(s, 'utf8'),
+    dec: (b) => Buffer.from(b).toString('utf8')
+  }
 
   constructor(file: string) {
     this.db = new DatabaseSync(file)
@@ -487,6 +497,86 @@ export class Repo {
     })
   }
 
+  // ---------- auth ----------
+  getCollectionAuth(id: string): PmAuth | null {
+    const row = this.db.prepare('SELECT auth_json FROM collections WHERE id = ?').get(id) as unknown as { auth_json: string | null } | undefined
+    return row?.auth_json ? (JSON.parse(row.auth_json) as PmAuth) : null
+  }
+
+  setCollectionAuth(id: string, auth: PmAuth | null): void {
+    this.db.prepare('UPDATE collections SET auth_json = ?, updated_at = ? WHERE id = ?').run(auth ? JSON.stringify(auth) : null, Date.now(), id)
+  }
+
+  getFolder(id: string): FolderDoc | null {
+    const row = this.db.prepare("SELECT name, body_json FROM items WHERE id = ? AND kind = 'folder'").get(id) as unknown as
+      | { name: string; body_json: string | null }
+      | undefined
+    if (!row) return null
+    const doc = row.body_json ? (JSON.parse(row.body_json) as FolderDoc) : { name: row.name }
+    return { ...doc, name: row.name }
+  }
+
+  setFolderAuth(id: string, auth: PmAuth | null): void {
+    const doc = this.getFolder(id)
+    if (!doc) throw new Error('Pasta não encontrada')
+    if (auth) doc.auth = auth
+    else delete doc.auth
+    this.db.prepare('UPDATE items SET body_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(doc), Date.now(), id)
+  }
+
+  parentOf(itemId: string): string | null {
+    const row = this.db.prepare('SELECT parent_id FROM items WHERE id = ?').get(itemId) as unknown as { parent_id: string | null } | undefined
+    return row?.parent_id ?? null
+  }
+
+  /** Auth herdado: a pasta mais próxima com auth (subindo a partir de parentId) ou a collection. */
+  inheritedAuth(collectionId: string, parentId: string | null): InheritedAuth {
+    let cur = parentId
+    let guard = 0
+    while (cur && guard++ < 100) {
+      const f = this.getFolder(cur)
+      if (!f) break
+      if (f.auth) return { auth: f.auth, from: { kind: 'folder', name: f.name } }
+      cur = this.parentOf(cur)
+    }
+    const auth = this.getCollectionAuth(collectionId)
+    const name = (this.db.prepare('SELECT name FROM collections WHERE id = ?').get(collectionId) as unknown as { name: string } | undefined)?.name ?? ''
+    return auth ? { auth, from: { kind: 'collection', name } } : { auth: null, from: null }
+  }
+
+  // ---------- tokens OAuth 2.0 (cifrados) ----------
+  saveToken(t: OAuth2Token): OAuth2Token {
+    const token = { ...t, id: t.id || randomUUID() }
+    this.db
+      .prepare(
+        `INSERT INTO oauth_tokens (id, scope_key, name, token_enc, expires_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET scope_key = excluded.scope_key, name = excluded.name, token_enc = excluded.token_enc, expires_at = excluded.expires_at`
+      )
+      .run(token.id, token.clientId, token.name, this.crypt.enc(JSON.stringify(token)), token.expiresAt)
+    return token
+  }
+
+  listTokens(): OAuth2Token[] {
+    const rows = this.db.prepare('SELECT token_enc FROM oauth_tokens').all() as unknown as { token_enc: Uint8Array }[]
+    const out: OAuth2Token[] = []
+    for (const r of rows) {
+      try {
+        out.push(JSON.parse(this.crypt.dec(Buffer.from(r.token_enc))) as OAuth2Token)
+      } catch {
+        // token cifrado por outra conta do Windows: ignora
+      }
+    }
+    return out.sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  getToken(id: string): OAuth2Token | null {
+    return this.listTokens().find((t) => t.id === id) ?? null
+  }
+
+  deleteToken(id: string): void {
+    this.db.prepare('DELETE FROM oauth_tokens WHERE id = ?').run(id)
+  }
+
   // ---------- history ----------
   addHistory(doc: RequestDoc, meta: { status: number | null; timeMs: number | null; error?: string }): void {
     this.db
@@ -525,6 +615,11 @@ export class Repo {
       | { request_json: string }
       | undefined
     return row ? (JSON.parse(row.request_json) as RequestDoc) : null
+  }
+
+  deleteHistory(ids: number[]): void {
+    const st = this.db.prepare('DELETE FROM history WHERE id = ?')
+    for (const id of ids) st.run(id)
   }
 
   clearHistory(): void {

@@ -2,6 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import type { IpcChannel, IpcContract } from '@shared/types'
 import type { Repo } from './db'
 import { cancel, send } from './http'
+import { configFrom, getNewToken, refreshToken } from './oauth2'
+import { getBool, getParam, resolveAuth } from '@shared/auth'
+import type { PmAuth } from '@shared/types'
 import { makeLookup, resolveDoc, type Scope } from '@shared/variables'
 import { countRequests, exportCollection, exportEnvironment, parsePostman, safeFileName } from '@shared/postman'
 import { looksLikeCurl, parseCurl } from '@shared/curl'
@@ -44,6 +47,25 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     'globals:get': () => repo.getGlobals(),
     'globals:set': (values) => repo.setGlobals(values),
     'collections:setVariables': (id, values) => repo.setCollectionVariables(id, values),
+    'collections:getAuth': (id) => repo.getCollectionAuth(id),
+    'collections:setAuth': (id, auth) => repo.setCollectionAuth(id, auth),
+    'items:getFolder': (id) => repo.getFolder(id),
+    'items:setFolderAuth': (id, auth) => repo.setFolderAuth(id, auth),
+    'auth:inherited': (collectionId, parentId) => repo.inheritedAuth(collectionId, parentId),
+    'oauth2:getToken': async (auth, collectionId, environmentId) => {
+      const a = resolveAuth(auth, lookupOf(repo, collectionId, environmentId))
+      const cfg = configFrom((k, d = '') => getParam(a, k, d))
+      const token = await getNewToken(cfg, BrowserWindow.getFocusedWindow())
+      return repo.saveToken(token)
+    },
+    'oauth2:listTokens': () => repo.listTokens(),
+    'oauth2:deleteToken': (id) => repo.deleteToken(id),
+    'oauth2:refresh': async (id, auth, collectionId, environmentId) => {
+      const t = repo.getToken(id)
+      if (!t) throw new Error('Token não encontrado')
+      const a = auth ? resolveAuth(auth, lookupOf(repo, collectionId, environmentId)) : undefined
+      return repo.saveToken(await refreshToken(t, configFrom((k, d = '') => getParam(a, k, d))))
+    },
     'import:text': (text, fileName) => importText(repo, text, fileName),
     'import:pickFiles': async () => {
       const win = BrowserWindow.getFocusedWindow()
@@ -71,12 +93,24 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     'state:get': (key) => repo.getState(key),
     'state:set': (key, value) => repo.setState(key, value),
     'http:send': async (input) => {
-      const scopes: Scope[] = [{ name: 'global', values: repo.getGlobals() }]
-      if (input.collectionId) scopes.push({ name: 'collection', values: repo.getCollectionVariables(input.collectionId) })
-      const env = input.environmentId ? repo.getEnvironment(input.environmentId) : null
-      if (env) scopes.push({ name: 'environment', values: env.values })
-      const resolved = { ...input, doc: resolveDoc(input.doc, makeLookup(scopes)) }
+      const lookup = lookupOf(repo, input.collectionId, input.environmentId)
+      // auth: o da requisição ou o herdado da pasta/collection; variáveis resolvidas
+      let auth: PmAuth | undefined = input.doc.request.auth
+      if (!auth && input.collectionId) {
+        const parent = input.itemId ? repo.parentOf(input.itemId) : null
+        auth = repo.inheritedAuth(input.collectionId, parent).auth ?? undefined
+      }
+      if (auth?.type === 'noauth') auth = undefined
+      auth = resolveAuth(auth, lookup)
+      let refreshed = null
+      if (auth?.type === 'oauth2') {
+        const r = await maybeRefresh(repo, auth)
+        auth = r.auth
+        refreshed = r.refreshed
+      }
+      const resolved = { ...input, doc: resolveDoc(input.doc, lookup), auth }
       const result = await send(resolved, app.getVersion())
+      if (refreshed && result.ok) result.response.refreshedToken = refreshed
       if (!(!result.ok && result.cancelled)) {
         repo.addHistory(
           input.doc,
@@ -96,7 +130,8 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     },
     'history:list': (limit) => repo.listHistory(limit),
     'history:get': (id) => repo.getHistory(id),
-    'history:clear': () => repo.clearHistory()
+    'history:clear': () => repo.clearHistory(),
+    'history:delete': (ids) => repo.deleteHistory(ids)
   }
 
   for (const channel of Object.keys(handlers) as IpcChannel[]) {
@@ -146,4 +181,30 @@ function importText(repo: Repo, text: string, fileName: string | null): ImportRe
   } catch (err) {
     return { ok: false, name, error: (err as Error).message }
   }
+}
+
+function lookupOf(repo: Repo, collectionId: string | null, environmentId: string | null) {
+  const scopes: Scope[] = [{ name: 'global', values: repo.getGlobals() }]
+  if (collectionId) scopes.push({ name: 'collection', values: repo.getCollectionVariables(collectionId) })
+  const env = environmentId ? repo.getEnvironment(environmentId) : null
+  if (env) scopes.push({ name: 'environment', values: env.values })
+  return makeLookup(scopes)
+}
+
+/**
+ * OAuth 2.0 no envio: se o auth aponta para um token guardado (jp_tokenId), usa o token atual dele e,
+ * com "Auto-refresh" ligado, renova antes de vencer (30 s de folga) quando há refresh_token.
+ */
+async function maybeRefresh(repo: Repo, auth: PmAuth) {
+  const id = getParam(auth, 'jp_tokenId')
+  if (!id) return { auth, refreshed: null }
+  let t = repo.getToken(id)
+  if (!t) return { auth, refreshed: null }
+  let refreshed = null
+  if (getBool(auth, 'jp_autoRefresh', true) && t.refreshToken && t.expiresAt && t.expiresAt < Date.now() + 30_000) {
+    t = repo.saveToken(await refreshToken(t, configFrom((k, d = '') => getParam(auth, k, d))))
+    refreshed = t
+  }
+  const list = (auth.oauth2 as { key: string; value: unknown }[]).map((p) => (p.key === 'accessToken' ? { ...p, value: t!.accessToken } : p))
+  return { auth: { ...auth, oauth2: list }, refreshed }
 }

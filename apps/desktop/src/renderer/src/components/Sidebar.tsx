@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { CollectionTree, methodLabel } from './CollectionTree'
+import { api } from '../api'
 import { Icon } from '../icons'
 import { methodClass, useStore, type SidebarView } from '../store'
 
@@ -161,6 +162,19 @@ function HistoryPanel() {
                 <span className={`row-method ${methodClass(h.method)}`}>{methodLabel(h.method)}</span>
                 <span className="row-name">{h.url || h.name}</span>
                 <span className={`row-status ${h.status === null || h.status >= 400 ? 'bad' : ''}`}>{h.status ?? 'ERR'}</span>
+                <div className="row-menu">
+                  <button
+                    className="icon-btn"
+                    title="Remover do histórico"
+                    onClick={async (e) => {
+                      e.stopPropagation()
+                      await api.invoke('history:delete', [h.id])
+                      useStore.getState().loadHistory()
+                    }}
+                  >
+                    <Icon name="trash" size={13} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

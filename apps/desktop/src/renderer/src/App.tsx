@@ -4,6 +4,10 @@ import { Icon } from './icons'
 import { lookupFor, methodClass, useStore } from './store'
 import { VarContext } from './components/VarInput'
 import { VariablesEditor } from './components/VariablesEditor'
+import { AuthEditor } from './components/AuthEditor'
+import { TokenManager } from './components/TokenManager'
+import { useInherited } from './components/RequestEditor'
+import type { OpenTab } from './store'
 import { Sidebar } from './components/Sidebar'
 import { RequestEditor } from './components/RequestEditor'
 import { ResponsePane } from './components/ResponsePane'
@@ -41,6 +45,7 @@ export function App() {
       <ImportDialog />
       <ExportDialog />
       <Toast />
+      <TokenManager />
     </div>
   )
 }
@@ -129,7 +134,11 @@ function TabBar() {
             onClick={() => activate(t.key)}
             onMouseDown={(e) => e.button === 1 && (e.preventDefault(), close(t.key))}
           >
-            {t.vars ? (
+            {t.authOf ? (
+              <span className="tab-method tab-icon">
+                <Icon name="lock" size={13} />
+              </span>
+            ) : t.vars ? (
               <span className="tab-method tab-icon">
                 <Icon name={t.vars.scope.type === 'globals' ? 'globe' : t.vars.scope.type === 'collection' ? 'collections' : 'environments'} size={13} />
               </span>
@@ -137,8 +146,8 @@ function TabBar() {
               <span className={`tab-method ${methodClass(t.doc.request.method)}`}>{t.doc.request.method}</span>
             )}
             <span className="tab-name">
-              {t.vars ? t.vars.name : null}
-              {t.vars ? null : t.doc.name === 'Untitled Request' && t.doc.request.url.raw ? t.doc.request.url.raw : t.doc.name}
+              {t.vars ? t.vars.name : t.authOf ? `${t.authOf.name} · Authorization` : null}
+              {t.vars || t.authOf ? null : t.doc.name === 'Untitled Request' && t.doc.request.url.raw ? t.doc.request.url.raw : t.doc.name}
             </span>
             <button className="tab-close" onClick={(e) => (e.stopPropagation(), close(t.key))}>
               {t.dirty ? <span className="dirty-dot" /> : <Icon name="close" size={12} />}
@@ -249,6 +258,12 @@ function Workbench() {
     [globals, collections, environments, activeEnvId, collectionId]
   )
   if (tab?.vars) return <VariablesEditor tab={tab} />
+  if (tab?.authOf)
+    return (
+      <VarContext.Provider value={lookup}>
+        <ContainerAuth tab={tab} />
+      </VarContext.Provider>
+    )
   if (!tab)
     return (
       <div className="workbench-empty">
@@ -316,4 +331,44 @@ function Footer() {
       <span className="foot-info">{info}</span>
     </footer>
   )
+}
+
+/** Aba de auth de collection ou pasta (como a aba Authorization da collection/pasta no Postman). */
+function ContainerAuth({ tab }: { tab: OpenTab }) {
+  const a = tab.authOf!
+  const update = useStore((s) => s.updateAuthTab)
+  const save = useStore((s) => s.saveActive)
+  const inherited = useInheritedForFolder(a)
+  return (
+    <div className="vars-editor">
+      <div className="vars-head">
+        <span className="vars-kind">
+          <Icon name={a.kind === 'collection' ? 'collections' : 'folder'} size={16} />
+          {a.kind === 'collection' ? 'Collection' : 'Folder'}
+        </span>
+        <span className="vars-title">{a.name}</span>
+        <div className="spacer" />
+        <button className="btn ghost" disabled={!tab.dirty} onClick={() => save()} title="Ctrl+S">
+          Save
+        </button>
+      </div>
+      <p className="vars-hint">
+        {a.kind === 'collection'
+          ? 'Vale para todas as requisições da collection que estiverem com "Inherit auth from parent".'
+          : 'Vale para as requisições desta pasta (e subpastas) que estiverem com "Inherit auth from parent".'}
+      </p>
+      <AuthEditor
+        auth={a.kind === 'collection' && !a.auth ? { type: 'noauth' } : a.auth}
+        allowInherit={a.kind === 'folder'}
+        inherited={inherited}
+        collectionId={a.collectionId}
+        onChange={(auth) => update(a.kind === 'collection' && auth?.type === 'noauth' ? undefined : auth)}
+      />
+    </div>
+  )
+}
+
+function useInheritedForFolder(a: NonNullable<OpenTab['authOf']>) {
+  // pasta herda da pasta-mãe ou da collection; reaproveita o hook passando o id da pasta como "item"
+  return useInherited(a.kind === 'folder' ? a.collectionId : null, a.kind === 'folder' ? a.id : null)
 }

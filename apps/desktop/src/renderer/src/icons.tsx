@@ -74,6 +74,12 @@ const paths: Record<string, ReactElement> = {
   import: <path {...p} d="M12 3v12M7 10l5 5 5-5M4 19h16" />,
   trash: <path {...p} d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />,
   check: <path {...p} d="M5 12.5l4.5 4.5L19 7.5" />,
+  lock: (
+    <g {...p}>
+      <rect x="5" y="11" width="14" height="9" rx="2" />
+      <path d="M8 11V8a4 4 0 018 0v3" />
+    </g>
+  ),
   copy: (
     <g {...p}>
       <rect x="8" y="8" width="12" height="12" rx="2" />

@@ -117,6 +117,10 @@ export interface SendInput {
   /** escopos usados para resolver {{variáveis}} no envio */
   environmentId: string | null
   collectionId: string | null
+  /** requisição salva (para herdar auth das pastas); null em aba não salva */
+  itemId: string | null
+  /** preenchido pelo main antes de enviar: auth efetivo já com variáveis resolvidas */
+  auth?: PmAuth
 }
 
 export interface HttpTimings {
@@ -152,6 +156,8 @@ export interface HttpResponse {
   redirects: number
   remoteAddress: string | null
   reusedConnection: boolean
+  /** OAuth 2.0: token renovado automaticamente antes deste envio */
+  refreshedToken?: OAuth2Token
   request: SentRequest
 }
 
@@ -215,6 +221,15 @@ export interface IpcContract {
   'globals:get': { args: []; ret: KeyValue[] }
   'globals:set': { args: [values: KeyValue[]]; ret: void }
   'collections:setVariables': { args: [id: string, values: KeyValue[]]; ret: void }
+  'collections:getAuth': { args: [id: string]; ret: PmAuth | null }
+  'collections:setAuth': { args: [id: string, auth: PmAuth | null]; ret: void }
+  'items:getFolder': { args: [id: string]; ret: FolderDoc | null }
+  'items:setFolderAuth': { args: [id: string, auth: PmAuth | null]; ret: void }
+  'auth:inherited': { args: [collectionId: string, parentId: string | null]; ret: InheritedAuth }
+  'oauth2:getToken': { args: [auth: PmAuth, collectionId: string | null, environmentId: string | null]; ret: OAuth2Token }
+  'oauth2:listTokens': { args: []; ret: OAuth2Token[] }
+  'oauth2:deleteToken': { args: [id: string]; ret: void }
+  'oauth2:refresh': { args: [id: string, auth: PmAuth | null, collectionId: string | null, environmentId: string | null]; ret: OAuth2Token }
   'import:text': { args: [text: string, fileName: string | null]; ret: ImportResult }
   'import:pickFiles': { args: []; ret: { name: string; text: string }[] }
   'export:collection': { args: [id: string, version: '2.1' | '2.0']; ret: string | null }
@@ -228,6 +243,7 @@ export interface IpcContract {
   'history:list': { args: [limit: number]; ret: HistoryEntry[] }
   'history:get': { args: [id: number]; ret: RequestDoc | null }
   'history:clear': { args: []; ret: void }
+  'history:delete': { args: [ids: number[]]; ret: void }
 }
 
 export type IpcChannel = keyof IpcContract
@@ -256,6 +272,15 @@ export const IPC_CHANNELS: IpcChannel[] = [
   'globals:get',
   'globals:set',
   'collections:setVariables',
+  'collections:getAuth',
+  'collections:setAuth',
+  'items:getFolder',
+  'items:setFolderAuth',
+  'auth:inherited',
+  'oauth2:getToken',
+  'oauth2:listTokens',
+  'oauth2:deleteToken',
+  'oauth2:refresh',
   'import:text',
   'import:pickFiles',
   'export:collection',
@@ -268,7 +293,8 @@ export const IPC_CHANNELS: IpcChannel[] = [
   'dialog:openFiles',
   'history:list',
   'history:get',
-  'history:clear'
+  'history:clear',
+  'history:delete'
 ]
 
 export interface JeffPostmanBridge {
@@ -281,3 +307,25 @@ export type ImportResult =
   | { ok: true; kind: 'globals'; name: string; count: number; globals: KeyValue[] }
   | { ok: true; kind: 'curl'; name: string; doc: RequestDoc }
   | { ok: false; name: string; error: string }
+
+export interface OAuth2Token {
+  id: string
+  name: string
+  accessToken: string
+  tokenType: string
+  refreshToken: string | null
+  idToken: string | null
+  scope: string | null
+  /** epoch ms; null quando o servidor não informou expires_in */
+  expiresAt: number | null
+  createdAt: number
+  grantType: string
+  clientId: string
+  accessTokenUrl: string
+  extra: Record<string, string>
+}
+
+export interface InheritedAuth {
+  auth: PmAuth | null
+  from: { kind: 'folder' | 'collection'; name: string } | null
+}

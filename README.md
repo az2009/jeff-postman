@@ -4,7 +4,17 @@ Plano completo: [PLANO.md](PLANO.md).
 
 ## Estado
 
-**Fases 0 a 4 concluídas em 24/11/2026.**
+**Fases 0 a 5 concluídas em 24/11/2026.**
+
+Fase 5, autenticação (aba Authorization):
+- **Tipos:** Inherit auth from parent, No Auth, Basic Auth, Bearer Token, API Key (header ou query), OAuth 1.0 e OAuth 2.0, no formato v2.1 do Postman (importa e exporta igual). Todos os campos aceitam `{{variáveis}}`; segredos aparecem mascarados com olho para mostrar.
+- **Herança:** requisição em "Inherit" usa a pasta mais próxima com auth e, sem pasta, a collection; a aba mostra de onde vem. Auth de collection e de pasta: menu da collection/pasta → **Authorization** (aba própria, Ctrl+S salva). "No Auth" na requisição corta a herança.
+- **OAuth 1.0:** HMAC-SHA1/256/512, RSA-SHA1/256/512 (chave privada PEM) e PLAINTEXT; dados no header ou no corpo/URL; avançado com callback, verifier, timestamp, nonce, version, realm, body hash e parâmetros vazios. A assinatura sai da URL e do corpo finais (já com variáveis).
+- **OAuth 2.0:** Authorization Code, Authorization Code com PKCE (S256 ou plain), Implicit, Password Credentials e Client Credentials; client auth por header Basic ou no corpo; scope, state (gerado se vazio e conferido na volta), audience. Os fluxos com login abrem numa janela própria, com sessão isolada, e o app captura o redirect (Callback URL padrão `https://oauth.pstmn.io/v1/callback`).
+- **Tokens:** guardados no banco **cifrados** com a proteção do Windows (DPAPI, via Electron). "Manage tokens" lista, mostra detalhes, copia, renova (refresh_token) e apaga. Token na requisição: header com prefixo (Bearer por padrão) ou na URL (`access_token`). **Auto-refresh**: com o token escolhido da lista, o app renova antes de vencer e avisa.
+- Headers automáticos mostram o `Authorization` gerado pelo auth; um header seu com o mesmo nome vence.
+- History: dá para apagar uma entrada só (ícone de lixeira).
+- **Testes:** 44 automáticos (`npm test`), incluindo os vetores da RFC 5849 (seções 1.2 e 3.4.1.1) e o exemplo publicado do Twitter. No app, contra um servidor OAuth local: Basic, API Key, OAuth 1.0 conferido por implementação independente no servidor (GET, POST com formulário e segredo errado recusado), os 5 fluxos do OAuth 2.0 (3 com janela de login), segredo errado recusado, token na URL, auto-refresh e herança em 2 níveis de pasta.
 
 Fase 4, importar e exportar:
 - **Import** (botão no topo ou Ctrl+O): arrastar arquivos, escolher arquivos ou colar texto. Reconhece sozinho collection **v2.0 e v2.1**, environment, globals (mescla por nome) e **comando cURL** (abre numa aba nova). Mostra o resultado de cada arquivo e o erro quando não reconhece. Collection v1 é recusada com aviso.
@@ -13,7 +23,7 @@ Fase 4, importar e exportar:
 - **Nada se perde na ida e volta:** auth (convertida entre v2.0 e v2.1), scripts (`event`), exemplos de resposta, `protocolProfileBehavior`, descrições, variáveis da collection, campos extras do `info`, corpo GraphQL e outros modos que o app ainda não edita.
 - **Query params desligados** agora aparecem (desmarcados) na aba Params e são guardados; desmarcar um param não o apaga mais.
 - **Path Variables** (`/users/:id`): tabela própria na aba Params, e o valor entra no envio.
-- **Testes:** 37 no total (`npm test`). A ida e volta foi conferida com 2 collections reais exportadas do Postman (108 requisições, 21 pastas, até 4 níveis, 44 query params desligados, auth bearer/OAuth2) e 1 environment real com 32 variáveis, passando também pelo SQLite. Para repetir com arquivos seus: `PM_FILES="a.json;b.json" npm test` (os arquivos não ficam no projeto).
+- **Testes:** a ida e volta foi conferida com 2 collections reais exportadas do Postman (108 requisições, 21 pastas, até 4 níveis, 44 query params desligados, auth bearer/OAuth2) e 1 environment real com 32 variáveis, passando também pelo SQLite. Para repetir com arquivos seus: `PM_FILES="a.json;b.json" npm test` (os arquivos não ficam no projeto).
 
 Fase 3, variáveis:
 - **Environments** (barra lateral Environments): criar, editar em aba própria (Variable, Type, Value, filtro, Save com Ctrl+S), renomear, duplicar, apagar e ativar (círculo verde ou seletor no canto superior direito).

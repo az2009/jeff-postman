@@ -169,7 +169,7 @@ Resultado dos testes: pass/fail/skip com mensagem de erro, mostrados na aba Test
 | 2. Collections ✅ 24/11 | Árvore, pastas, drag and drop, salvar, duplicar, busca | 5.000 requisições sem travar a árvore | 1,5 semana |
 | 3. Variáveis ✅ 24/11 | Environments, globals, collection vars, `{{}}` com realce, dinâmicas | Precedência igual à do Postman (testes de unidade) | 1 semana |
 | 4. Import/Export ✅ 24/11 | v2.1/v2.0, environment, cURL | Ida e volta sem perda com 3 collections reais | 1 semana |
-| 5. Auth | Basic, Bearer, API Key, herança, OAuth 1.0, OAuth 2.0 (5 grants + PKCE), gerenciador de tokens | Vetores RFC 5849; fluxo real com um provedor (ex.: GitHub ou Keycloak local) | 2 semanas |
+| 5. Auth ✅ 24/11 | Basic, Bearer, API Key, herança, OAuth 1.0, OAuth 2.0 (5 grants + PKCE), gerenciador de tokens | Vetores RFC 5849; fluxo real com um provedor (ex.: GitHub ou Keycloak local) | 2 semanas |
 | 6. Scripts e testes | Sandbox, API `pm`, snippets, Test Results, `pm.sendRequest` | Bateria de scripts típicos do Postman rodando igual | 2,5 semanas |
 | 7. Console | Console completo | Mostra requisição crua, logs, erros | 0,5 semana |
 | 8. Runner | Runner com CSV/JSON, iterações, delay, resultado, exportação, CLI | 100 iterações × 20 requisições sem vazamento de memória | 2 semanas |

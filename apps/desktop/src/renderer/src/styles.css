@@ -1051,3 +1051,42 @@ tr.disabled .var-back { color: var(--text-3); }
 .toast.bad { border-left-color: var(--danger); }
 .kv + .kv { margin-top: 16px; }
 .kv-table td input.ro-key { color: var(--text-2); }
+
+/* ---------- fase 5: autenticação ---------- */
+.auth-editor { display: flex; gap: 24px; min-height: 0; }
+.auth-left { flex: 0 0 280px; padding-right: 20px; border-right: 1px solid var(--border); }
+.auth-label { display: block; color: var(--text-2); font-size: 12px; margin-bottom: 6px; }
+.auth-type, .auth-select { width: 100%; height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--input); }
+.auth-type option, .auth-select option { background: var(--bg-2); }
+.auth-desc { color: var(--text-2); font-size: 12px; margin: 10px 0 0; }
+.auth-desc.muted { color: var(--text-3); }
+.auth-right { flex: 1; min-width: 0; max-width: 720px; display: flex; flex-direction: column; gap: 10px; }
+.auth-inherit { color: var(--text-2); padding: 6px 0; }
+.auth-field { display: grid; grid-template-columns: 190px 1fr; align-items: center; gap: 12px; }
+.auth-field > label { color: var(--text-2); font-size: 12px; }
+.auth-input { display: flex; align-items: center; min-width: 0; height: 32px; border: 1px solid var(--border); border-radius: 4px; background: var(--input); }
+.auth-input:focus-within { border-color: var(--text-3); }
+.auth-input > .var-input, .auth-input > input { flex: 1; height: 100%; }
+.auth-input > input, .auth-input > .var-input > input { padding: 0 8px; border: 0; outline: 0; background: transparent; }
+.auth-input > .var-input .var-back { padding-left: 8px; }
+.auth-textarea { width: 100%; min-height: 110px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--input); font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px; outline: 0; resize: vertical; }
+.auth-check { display: flex; align-items: center; gap: 8px; color: var(--text-2); padding-left: 202px; }
+.auth-section { margin-top: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); font-weight: 600; color: var(--text); }
+.auth-actions { padding-left: 202px; padding-top: 4px; }
+.link.adv { align-self: flex-start; padding-left: 202px; }
+.token-row { display: flex; align-items: center; gap: 10px; }
+.token-row select { flex: 1; height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--input); }
+.token-row select option { background: var(--bg-2); }
+.subtab-body:has(.auth-editor) { padding-top: 14px; }
+.vars-editor .auth-editor { margin-top: 6px; overflow: auto; }
+
+.token-modal { width: 820px; }
+.token-body { display: flex; gap: 12px; min-height: 320px; max-height: 60vh; }
+.token-list { flex: 0 0 220px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; padding: 4px 0; background: var(--bg); }
+.token-list .row { padding-left: 10px; }
+.tk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--m-get); flex: none; }
+.tk-dot.old { background: var(--danger); }
+.token-detail { flex: 1; min-width: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.token-detail .ql-table td { white-space: normal; }
+.mono.wrap { word-break: break-all; }
+.danger-text { color: var(--danger) !important; }

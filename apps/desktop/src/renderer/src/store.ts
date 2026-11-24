@@ -3,6 +3,8 @@ import type {
   Collection,
   Environment,
   HistoryEntry,
+  OAuth2Token,
+  PmAuth,
   ImportResult,
   HttpMethod,
   HttpResponse,
@@ -12,6 +14,7 @@ import type {
   TreeItem
 } from '@shared/types'
 import { api } from './api'
+import { setParam } from '@shared/auth'
 import { makeLookup, type Lookup, type Scope } from '@shared/variables'
 
 export type SidebarView = 'collections' | 'environments' | 'history'
@@ -28,6 +31,17 @@ export interface OpenTab {
   run: RunState | null
   /** presente quando a aba edita variáveis (environment, globals ou collection) em vez de uma requisição */
   vars?: VarsTab
+  /** presente quando a aba edita o auth de uma collection ou pasta */
+  authOf?: AuthTab
+}
+
+export interface AuthTab {
+  kind: 'collection' | 'folder'
+  id: string
+  collectionId: string
+  parentId: string | null
+  name: string
+  auth: PmAuth | undefined
 }
 
 export type VarScope = { type: 'environment'; id: string } | { type: 'globals' } | { type: 'collection'; id: string }
@@ -87,6 +101,16 @@ interface State {
   saveActiveAs(name: string, collectionId: string, parentId: string | null): Promise<void>
   createEnvironment(): Promise<void>
   globals: KeyValue[]
+  oauthTokens: OAuth2Token[]
+  loadTokens(): Promise<void>
+  tokenManager: boolean
+  tokenPick: ((t: OAuth2Token) => void) | null
+  openTokenManager(pick?: (t: OAuth2Token) => void): void
+  closeTokenManager(): void
+  /** muda quando o auth de alguma collection/pasta é salvo (para refazer o "herdado") */
+  authVersion: number
+  openAuthTab(kind: 'collection' | 'folder', id: string): Promise<void>
+  updateAuthTab(auth: PmAuth | undefined): void
   importOpen: boolean
   openImport(): void
   closeImport(): void
@@ -139,6 +163,10 @@ export const useStore = create<State>((set, get) => ({
   bottomPanel: 'none',
   saveDialogTabKey: null,
   globals: [],
+  oauthTokens: [],
+  tokenManager: false,
+  tokenPick: null,
+  authVersion: 0,
   importOpen: false,
   exportCollectionId: null,
   toast: null,
@@ -248,6 +276,55 @@ export const useStore = create<State>((set, get) => ({
     const e = await api.invoke('environments:create', 'New Environment')
     set((s) => ({ environments: [...s.environments, e] }))
     get().openVariables({ type: 'environment', id: e.id })
+  },
+  async loadTokens() {
+    set({ oauthTokens: await api.invoke('oauth2:listTokens') })
+  },
+  openTokenManager(pick) {
+    set({ tokenManager: true, tokenPick: pick ?? null })
+  },
+  closeTokenManager() {
+    set({ tokenManager: false, tokenPick: null })
+  },
+  async openAuthTab(kind, id) {
+    const existing = get().tabs.find((t) => t.authOf && t.authOf.kind === kind && t.authOf.id === id)
+    if (existing) return set({ activeTabKey: existing.key })
+    let auth: PmAuth | undefined
+    let name = ''
+    let collectionId = id
+    let parentId: string | null = null
+    if (kind === 'collection') {
+      auth = (await api.invoke('collections:getAuth', id)) ?? undefined
+      name = get().collections.find((c) => c.id === id)?.name ?? ''
+    } else {
+      const f = await api.invoke('items:getFolder', id)
+      if (!f) return
+      auth = f.auth
+      name = f.name
+      for (const [cid, list] of Object.entries(get().items)) {
+        const it = list.find((x) => x.id === id)
+        if (it) {
+          collectionId = cid
+          parentId = it.parentId
+        }
+      }
+    }
+    const tab: OpenTab = {
+      key: `t${++tabCounter}`,
+      itemId: null,
+      collectionId,
+      doc: blankDoc(),
+      dirty: false,
+      subTab: 'auth',
+      run: null,
+      authOf: { kind, id, collectionId, parentId, name, auth }
+    }
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabKey: tab.key }))
+  },
+  updateAuthTab(auth) {
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.key === s.activeTabKey && t.authOf ? { ...t, authOf: { ...t.authOf, auth }, dirty: true } : t))
+    }))
   },
   openImport() {
     set({ importOpen: true })
@@ -409,6 +486,13 @@ export const useStore = create<State>((set, get) => ({
     const tab = get().tabs.find((t) => t.key === get().activeTabKey)
     if (!tab) return
     if (tab.vars) return get().saveVariables(tab.key)
+    if (tab.authOf) {
+      const a = tab.authOf
+      if (a.kind === 'collection') await api.invoke('collections:setAuth', a.id, a.auth ?? null)
+      else await api.invoke('items:setFolderAuth', a.id, a.auth ?? null)
+      set((s) => ({ authVersion: s.authVersion + 1, tabs: s.tabs.map((t) => (t.key === tab.key ? { ...t, dirty: false } : t)) }))
+      return
+    }
     if (!tab.itemId || !tab.collectionId) return set({ saveDialogTabKey: tab.key })
     await api.invoke('items:saveRequest', tab.itemId, tab.doc)
     const collectionId = tab.collectionId
@@ -425,7 +509,7 @@ export const useStore = create<State>((set, get) => ({
 
   async sendActive() {
     const tab = get().tabs.find((t) => t.key === get().activeTabKey)
-    if (!tab || tab.vars || tab.run?.state === 'loading' || !tab.doc.request.url.raw.trim()) return
+    if (!tab || tab.vars || tab.authOf || tab.run?.state === 'loading' || !tab.doc.request.url.raw.trim()) return
     const requestId = crypto.randomUUID()
     const key = tab.key
     const setRun = (run: RunState) =>
@@ -437,9 +521,25 @@ export const useStore = create<State>((set, get) => ({
       requestId,
       doc: tab.doc,
       environmentId: get().activeEnvId,
-      collectionId: tab.collectionId
+      collectionId: tab.collectionId,
+      itemId: tab.itemId
     })
-    if (result.ok) setRun({ state: 'done', requestId, response: result.response })
+    if (result.ok) {
+      setRun({ state: 'done', requestId, response: result.response })
+      const t = result.response.refreshedToken
+      if (t) {
+        // token renovado no envio: atualiza o token atual da aba (se o auth é dela) e a lista
+        set((s) => ({
+          tabs: s.tabs.map((x) =>
+            x.key === key && x.doc.request.auth?.type === 'oauth2'
+              ? { ...x, doc: { ...x.doc, request: { ...x.doc.request, auth: setParam(x.doc.request.auth, 'accessToken', t.accessToken) } } }
+              : x
+          )
+        }))
+        get().loadTokens()
+        get().showToast(`Token "${t.name}" renovado automaticamente`)
+      }
+    }
     else if (result.cancelled) setRun({ state: 'cancelled', requestId })
     else setRun({ state: 'error', requestId, error: result.error, code: result.code, request: result.request })
     get().loadHistory()

@@ -1,9 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { VarInput } from './VarInput'
 import { looksLikeCurl, parseCurl } from '@shared/curl'
 import { pathVarNames } from '@shared/variables'
 import { HTTP_METHODS, type HttpMethod } from '@shared/types'
-import { activeBody, autoHeaders, userOverrides } from '@shared/http'
+import { activeBody, autoHeaders, CALCULATED, userOverrides } from '@shared/http'
+import { authHeaderName } from '@shared/auth'
+import type { InheritedAuth } from '@shared/types'
+import { AuthEditor } from './AuthEditor'
+import { api } from '../api'
 import { KeyValueTable } from './KeyValueTable'
 import { BodyEditor } from './BodyEditor'
 import { itemPath, methodClass, parseQuery, useStore, withQuery, type OpenTab, type RequestTab } from '../store'
@@ -31,7 +35,10 @@ export function RequestEditor({ tab }: { tab: OpenTab }) {
   const params = parseQuery(request.url.raw)
   const pathVars = pathVarNames(request.url.raw)
   const loading = tab.run?.state === 'loading'
-  const auto = autoHeaders(tab.doc, version)
+  const inherited = useInherited(tab.collectionId, tab.itemId)
+  const effAuth = request.auth ?? inherited?.auth ?? undefined
+  const authHeader = effAuth?.type === 'noauth' ? null : authHeaderName(effAuth)
+  const auto = authHeader ? [...autoHeaders(tab.doc, version), { key: authHeader, value: CALCULATED }] : autoHeaders(tab.doc, version)
   const overridden = userOverrides(request.header)
 
   const counts: Partial<Record<RequestTab, number>> = {
@@ -155,7 +162,22 @@ export function RequestEditor({ tab }: { tab: OpenTab }) {
             onChange={(body) => update((d) => ({ ...d, request: { ...d.request, body } }))}
           />
         )}
-        {tab.subTab === 'auth' && <Placeholder text="Basic Auth, Bearer, API Key, OAuth 1.0 e OAuth 2.0 entram na fase 5." />}
+        {tab.subTab === 'auth' && (
+          <AuthEditor
+            auth={request.auth}
+            allowInherit
+            inherited={inherited}
+            collectionId={tab.collectionId}
+            onChange={(auth) =>
+              update((d) => {
+                const r = { ...d.request }
+                if (auth) r.auth = auth
+                else delete r.auth
+                return { ...d, request: r }
+              })
+            }
+          />
+        )}
         {tab.subTab === 'scripts' && <Placeholder text="Pre-request e Post-response com a API pm entram na fase 6." />}
         {tab.subTab === 'settings' && <Placeholder text="Timeout, redirects e SSL entram na fase 9." />}
       </div>
@@ -203,4 +225,20 @@ function HeadersTab({
 
 function Placeholder({ text }: { text: string }) {
   return <div className="placeholder">{text}</div>
+}
+
+/** Auth herdado da pasta/collection da requisição (refeito quando algum auth de pasta/collection é salvo). */
+export function useInherited(collectionId: string | null, itemId: string | null): InheritedAuth | null {
+  const parentId = useStore((s) => (collectionId && itemId ? (s.items[collectionId]?.find((i) => i.id === itemId)?.parentId ?? null) : null))
+  const version = useStore((s) => s.authVersion)
+  const [v, setV] = useState<InheritedAuth | null>(null)
+  useEffect(() => {
+    let alive = true
+    if (!collectionId) return setV(null)
+    api.invoke('auth:inherited', collectionId, parentId).then((r) => alive && setV(r))
+    return () => {
+      alive = false
+    }
+  }, [collectionId, parentId, version])
+  return v
 }
