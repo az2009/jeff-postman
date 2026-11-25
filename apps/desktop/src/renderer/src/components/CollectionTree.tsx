@@ -130,9 +130,10 @@ export function CollectionTree() {
         { label: 'Add folder', run: () => st().createItem(id, null, 'folder') },
         { label: 'Rename', run: () => setRenaming(id) },
         { label: 'Authorization', run: () => st().openAuthTab('collection', id) },
+        { label: 'Scripts', run: () => st().openAuthTab('collection', id, 'scripts') },
         { label: 'Edit variables', run: () => st().openVariables({ type: 'collection', id }) },
         { label: 'Duplicate', run: () => st().duplicateCollection(id) },
-        { label: 'Run collection (fase 8)', disabled: true },
+        { label: 'Run collection', run: () => st().openRunner(id, null) },
         { label: 'Export', run: () => st().openExport(id) },
         { label: 'Delete', danger: true, run: () => confirm(`Apagar a collection "${row.col.name}" e tudo dentro dela?`) && st().deleteCollection(id) }
       ]
@@ -153,6 +154,8 @@ export function CollectionTree() {
           { label: 'Add request', run: () => st().createItem(it.collectionId, it.id, 'request') },
           { label: 'Add folder', run: () => st().createItem(it.collectionId, it.id, 'folder') },
           { label: 'Authorization', run: () => st().openAuthTab('folder', it.id) },
+          { label: 'Scripts', run: () => st().openAuthTab('folder', it.id, 'scripts') },
+          { label: 'Run folder', run: () => st().openRunner(it.collectionId, it.id) },
           ...common
         ]
       : [{ label: 'Open in tab', run: () => st().openItem(it) }, ...common]

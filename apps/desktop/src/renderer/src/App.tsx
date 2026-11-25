@@ -5,7 +5,11 @@ import { lookupFor, methodClass, useStore } from './store'
 import { VarContext } from './components/VarInput'
 import { VariablesEditor } from './components/VariablesEditor'
 import { AuthEditor } from './components/AuthEditor'
+import { ScriptsEditor, hasScripts } from './components/ScriptsEditor'
 import { TokenManager } from './components/TokenManager'
+import { ConsolePanel } from './components/ConsolePanel'
+import { RunnerView } from './components/Runner'
+import { CodeDialog, CookieManager, SearchPalette, SettingsDialog } from './components/Dialogs'
 import { useInherited } from './components/RequestEditor'
 import type { OpenTab } from './store'
 import { Sidebar } from './components/Sidebar'
@@ -46,6 +50,10 @@ export function App() {
       <ExportDialog />
       <Toast />
       <TokenManager />
+      <SettingsDialog />
+      <CookieManager />
+      <CodeDialog />
+      <SearchPalette />
     </div>
   )
 }
@@ -62,6 +70,8 @@ function useShortcuts() {
       if (k === 'enter') (e.preventDefault(), useStore.getState().sendActive())
       else if (k === 's') (e.preventDefault(), save())
       else if (k === 'o') (e.preventDefault(), useStore.getState().openImport())
+      else if (k === 'k') (e.preventDefault(), useStore.getState().openModal('search'))
+      else if (k === ',') (e.preventDefault(), useStore.getState().openModal('settings'))
       else if (k === 'd') {
         e.preventDefault()
         const s = useStore.getState()
@@ -95,9 +105,9 @@ function Header() {
         <button className="link-btn">Home</button>
         <button className="link-btn">Workspaces ▾</button>
       </nav>
-      <div className="header-search no-drag">
+      <div className="header-search no-drag" onClick={() => useStore.getState().openModal('search')}>
         <Icon name="search" size={14} />
-        <input placeholder="Search JEFF Postman" />
+        <input placeholder="Search JEFF Postman" readOnly onFocus={(e) => (e.target.blur(), useStore.getState().openModal('search'))} />
         <kbd>Ctrl K</kbd>
       </div>
       <div className="header-actions no-drag">
@@ -112,7 +122,9 @@ function Header() {
         >
           <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
         </button>
-        <button className="icon-btn" title="Settings"><Icon name="settings" /></button>
+        <button className="icon-btn" title="Settings" onClick={() => useStore.getState().openModal('settings')}>
+          <Icon name="settings" />
+        </button>
       </div>
     </header>
   )
@@ -134,7 +146,11 @@ function TabBar() {
             onClick={() => activate(t.key)}
             onMouseDown={(e) => e.button === 1 && (e.preventDefault(), close(t.key))}
           >
-            {t.authOf ? (
+            {t.runner ? (
+              <span className="tab-method tab-icon">
+                <Icon name="runner" size={13} />
+              </span>
+            ) : t.authOf ? (
               <span className="tab-method tab-icon">
                 <Icon name="lock" size={13} />
               </span>
@@ -146,8 +162,8 @@ function TabBar() {
               <span className={`tab-method ${methodClass(t.doc.request.method)}`}>{t.doc.request.method}</span>
             )}
             <span className="tab-name">
-              {t.vars ? t.vars.name : t.authOf ? `${t.authOf.name} · Authorization` : null}
-              {t.vars || t.authOf ? null : t.doc.name === 'Untitled Request' && t.doc.request.url.raw ? t.doc.request.url.raw : t.doc.name}
+              {t.runner ? `Runner${t.runner.name ? ` · ${t.runner.name}` : ''}` : t.vars ? t.vars.name : t.authOf ? `${t.authOf.name} · ${t.authOf.section === 'scripts' ? 'Scripts' : 'Authorization'}` : null}
+              {t.vars || t.authOf || t.runner ? null : t.doc.name === 'Untitled Request' && t.doc.request.url.raw ? t.doc.request.url.raw : t.doc.name}
             </span>
             <button className="tab-close" onClick={(e) => (e.stopPropagation(), close(t.key))}>
               {t.dirty ? <span className="dirty-dot" /> : <Icon name="close" size={12} />}
@@ -258,6 +274,7 @@ function Workbench() {
     [globals, collections, environments, activeEnvId, collectionId]
   )
   if (tab?.vars) return <VariablesEditor tab={tab} />
+  if (tab?.runner) return <RunnerView tab={tab} />
   if (tab?.authOf)
     return (
       <VarContext.Provider value={lookup}>
@@ -299,18 +316,7 @@ function Workbench() {
 
 function BottomPanel() {
   const panel = useStore((s) => s.bottomPanel)
-  const toggle = useStore((s) => s.togglePanel)
-  if (panel !== 'console') return null
-  return (
-    <section className="bottom-panel">
-      <div className="bottom-head">
-        <span>Console</span>
-        <div className="spacer" />
-        <button className="icon-btn" onClick={() => toggle('console')}><Icon name="close" size={12} /></button>
-      </div>
-      <div className="console-empty">Nenhum log. As requisições e os console.log dos scripts aparecem aqui (fase 7).</div>
-    </section>
-  )
+  return panel === 'console' ? <ConsolePanel /> : null
 }
 
 function Footer() {
@@ -326,8 +332,12 @@ function Footer() {
     <footer className="footer">
       <button className="foot-btn" onClick={() => toggle('console')}><Icon name="console" size={14} /> Console</button>
       <div className="spacer" />
-      <button className="foot-btn"><Icon name="runner" size={14} /> Runner</button>
-      <button className="foot-btn"><Icon name="cookie" size={14} /> Cookies</button>
+      <button className="foot-btn" onClick={() => useStore.getState().openRunner(useStore.getState().collections[0]?.id ?? null, null)}>
+        <Icon name="runner" size={14} /> Runner
+      </button>
+      <button className="foot-btn" onClick={() => useStore.getState().openModal('cookies')}>
+        <Icon name="cookie" size={14} /> Cookies
+      </button>
       <span className="foot-info">{info}</span>
     </footer>
   )
@@ -337,6 +347,7 @@ function Footer() {
 function ContainerAuth({ tab }: { tab: OpenTab }) {
   const a = tab.authOf!
   const update = useStore((s) => s.updateAuthTab)
+  const updateContainer = useStore((s) => s.updateContainer)
   const save = useStore((s) => s.saveActive)
   const inherited = useInheritedForFolder(a)
   return (
@@ -352,6 +363,32 @@ function ContainerAuth({ tab }: { tab: OpenTab }) {
           Save
         </button>
       </div>
+      <div className="subtabs container-tabs">
+        {(
+          [
+            ['auth', 'Authorization'],
+            ['scripts', 'Scripts']
+          ] as ['auth' | 'scripts', string][]
+        ).map(([id, label]) => (
+          <button key={id} className={`subtab ${a.section === id ? 'active' : ''}`} onClick={() => updateContainer({ section: id }, false)}>
+            {label}
+            {id === 'scripts' && hasScripts(a.events) ? <span className="dot-green" /> : null}
+          </button>
+        ))}
+      </div>
+      {a.section === 'scripts' ? (
+        <>
+          <p className="vars-hint">
+            {a.kind === 'collection'
+              ? 'Roda em toda requisição da collection: pre-request antes dos das pastas e da requisição; post-response também antes.'
+              : 'Roda em toda requisição desta pasta (e subpastas), depois dos scripts da collection e antes dos da requisição.'}
+          </p>
+          <div className="container-scripts">
+            <ScriptsEditor events={a.events} onChange={(events) => updateContainer({ events })} />
+          </div>
+        </>
+      ) : (
+        <>
       <p className="vars-hint">
         {a.kind === 'collection'
           ? 'Vale para todas as requisições da collection que estiverem com "Inherit auth from parent".'
@@ -364,6 +401,8 @@ function ContainerAuth({ tab }: { tab: OpenTab }) {
         collectionId={a.collectionId}
         onChange={(auth) => update(a.kind === 'collection' && auth?.type === 'noauth' ? undefined : auth)}
       />
+        </>
+      )}
     </div>
   )
 }

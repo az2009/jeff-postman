@@ -7,13 +7,20 @@ import type {
   HttpMethod,
   KeyValue,
   OAuth2Token,
+  AppSettings,
+  StoredCookie,
+  SearchHit,
+  RunRequestResult,
+  RunSummary,
   PmAuth,
   InheritedAuth,
   FolderDoc,
+  PmEvent,
   NewItemInput,
   RequestDoc,
   TreeItem
 } from '@shared/types'
+import { DEFAULT_SETTINGS } from '@shared/types'
 import type { ExportCollectionInput, ExportNode, ImportedCollection, ImportedNode } from '@shared/postman'
 
 type DB = DatabaseSync
@@ -497,6 +504,29 @@ export class Repo {
     })
   }
 
+  // ---------- scripts (events) ----------
+  getCollectionMeta(id: string): { name: string; events: PmEvent[] } | null {
+    const row = this.db.prepare('SELECT name, events_json FROM collections WHERE id = ?').get(id) as unknown as
+      | { name: string; events_json: string | null }
+      | undefined
+    if (!row) return null
+    return { name: row.name, events: row.events_json ? (JSON.parse(row.events_json) as PmEvent[]) : [] }
+  }
+
+  setCollectionEvents(id: string, events: PmEvent[]): void {
+    this.db
+      .prepare('UPDATE collections SET events_json = ?, updated_at = ? WHERE id = ?')
+      .run(events.length ? JSON.stringify(events) : null, Date.now(), id)
+  }
+
+  setFolderEvents(id: string, events: PmEvent[]): void {
+    const doc = this.getFolder(id)
+    if (!doc) throw new Error('Pasta não encontrada')
+    if (events.length) doc.event = events
+    else delete doc.event
+    this.db.prepare('UPDATE items SET body_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(doc), Date.now(), id)
+  }
+
   // ---------- auth ----------
   getCollectionAuth(id: string): PmAuth | null {
     const row = this.db.prepare('SELECT auth_json FROM collections WHERE id = ?').get(id) as unknown as { auth_json: string | null } | undefined
@@ -575,6 +605,131 @@ export class Repo {
 
   deleteToken(id: string): void {
     this.db.prepare('DELETE FROM oauth_tokens WHERE id = ?').run(id)
+  }
+
+  // ---------- configurações (cifradas: têm senha de proxy e de certificado) ----------
+  getSettings(): AppSettings {
+    const row = this.db.prepare("SELECT value FROM active_state WHERE key = 'settings_enc'").get() as unknown as { value: string } | undefined
+    if (!row) return structuredClone(DEFAULT_SETTINGS)
+    try {
+      const saved = JSON.parse(this.crypt.dec(Buffer.from(JSON.parse(row.value) as string, 'base64'))) as Partial<AppSettings>
+      return {
+        ...DEFAULT_SETTINGS,
+        ...saved,
+        proxy: { ...DEFAULT_SETTINGS.proxy, ...saved.proxy },
+        ca: { ...DEFAULT_SETTINGS.ca, ...saved.ca },
+        clientCerts: saved.clientCerts ?? []
+      }
+    } catch {
+      return structuredClone(DEFAULT_SETTINGS)
+    }
+  }
+
+  setSettings(s: AppSettings): AppSettings {
+    const clean: AppSettings = {
+      ...s,
+      requestTimeoutMs: Math.max(0, Math.floor(Number(s.requestTimeoutMs) || 0)),
+      maxRedirects: Math.max(0, Math.min(50, Math.floor(Number(s.maxRedirects) || 0))),
+      maxResponseMb: Math.max(1, Math.min(2048, Number(s.maxResponseMb) || 200)),
+      scriptTimeoutMs: Math.max(100, Math.min(600000, Number(s.scriptTimeoutMs) || 5000)),
+      proxy: { ...s.proxy, port: Math.max(1, Math.min(65535, Number(s.proxy.port) || 8080)) }
+    }
+    this.setState('settings_enc', this.crypt.enc(JSON.stringify(clean)).toString('base64'))
+    return clean
+  }
+
+  // ---------- cookies ----------
+  listCookies(): StoredCookie[] {
+    const rows = this.db.prepare('SELECT json FROM cookies').all() as unknown as { json: string }[]
+    return rows.map((r) => JSON.parse(r.json) as StoredCookie)
+  }
+
+  /** Grava o jar inteiro (chamado só quando mudou). */
+  replaceCookies(list: StoredCookie[]): void {
+    this.tx(() => {
+      this.db.exec('DELETE FROM cookies')
+      const st = this.db.prepare('INSERT OR REPLACE INTO cookies (domain, path, name, value, json) VALUES (?, ?, ?, ?, ?)')
+      for (const c of list) st.run(c.domain, c.path, c.name, c.value, JSON.stringify(c))
+    })
+  }
+
+  saveCookie(c: StoredCookie, replace: { domain: string; path: string; name: string } | null): void {
+    this.tx(() => {
+      if (replace) this.db.prepare('DELETE FROM cookies WHERE domain = ? AND path = ? AND name = ?').run(replace.domain, replace.path, replace.name)
+      this.db.prepare('INSERT OR REPLACE INTO cookies (domain, path, name, value, json) VALUES (?, ?, ?, ?, ?)').run(c.domain, c.path, c.name, c.value, JSON.stringify(c))
+    })
+  }
+
+  deleteCookie(domain: string, path: string, name: string): void {
+    this.db.prepare('DELETE FROM cookies WHERE domain = ? AND path = ? AND name = ?').run(domain, path, name)
+  }
+
+  clearCookies(domain: string | null): void {
+    if (domain) this.db.prepare('DELETE FROM cookies WHERE domain = ?').run(domain)
+    else this.db.exec('DELETE FROM cookies')
+  }
+
+  // ---------- busca (Ctrl+K) ----------
+  searchRequests(q: string, limit = 50): SearchHit[] {
+    const term = q.trim().toLowerCase()
+    if (!term) return []
+    const like = `%${term.replace(/[%_\\]/g, (m) => '\\' + m)}%`
+    const rows = this.db
+      .prepare(
+        `SELECT i.id, i.collection_id, c.name AS cname, i.name, i.method, i.body_json FROM items i JOIN collections c ON c.id = i.collection_id
+         WHERE i.kind = 'request' AND (lower(i.name) LIKE ? ESCAPE '\\' OR lower(i.body_json) LIKE ? ESCAPE '\\') LIMIT ?`
+      )
+      .all(like, like, limit * 3) as unknown as { id: string; collection_id: string; cname: string; name: string; method: string; body_json: string | null }[]
+    const hits: SearchHit[] = []
+    for (const r of rows) {
+      const url = r.body_json ? (JSON.parse(r.body_json) as RequestDoc).request?.url?.raw ?? '' : ''
+      // o LIKE no JSON pega também headers e corpo; aqui fica só nome e URL
+      if (!r.name.toLowerCase().includes(term) && !url.toLowerCase().includes(term)) continue
+      hits.push({ id: r.id, collectionId: r.collection_id, collectionName: r.cname, name: r.name, method: r.method ?? 'GET', url })
+      if (hits.length >= limit) break
+    }
+    return hits
+  }
+
+  // ---------- runner ----------
+  saveRun(summary: RunSummary, config: unknown): void {
+    this.db
+      .prepare(
+        `INSERT INTO runs (id, collection_id, started_at, config_json, summary_json) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET summary_json = excluded.summary_json`
+      )
+      .run(summary.id, summary.collectionId, summary.startedAt, JSON.stringify(config), JSON.stringify(summary))
+  }
+
+  saveRunResult(runId: string, r: RunRequestResult): void {
+    this.db
+      .prepare(
+        'INSERT INTO run_results (run_id, iteration, item_id, status, time_ms, tests_json, request_json, response_meta_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(runId, r.iteration, r.itemId, r.status, r.timeMs, JSON.stringify(r.tests), null, JSON.stringify(r))
+  }
+
+  listRuns(collectionId: string | null, limit = 50): RunSummary[] {
+    const rows = (
+      collectionId
+        ? this.db.prepare('SELECT summary_json FROM runs WHERE collection_id = ? ORDER BY started_at DESC LIMIT ?').all(collectionId, limit)
+        : this.db.prepare('SELECT summary_json FROM runs ORDER BY started_at DESC LIMIT ?').all(limit)
+    ) as unknown as { summary_json: string }[]
+    return rows.map((r) => JSON.parse(r.summary_json) as RunSummary)
+  }
+
+  getRun(runId: string): { summary: RunSummary; results: RunRequestResult[] } | null {
+    const row = this.db.prepare('SELECT summary_json FROM runs WHERE id = ?').get(runId) as unknown as { summary_json: string } | undefined
+    if (!row) return null
+    const res = this.db.prepare('SELECT response_meta_json FROM run_results WHERE run_id = ? ORDER BY rowid').all(runId) as unknown as {
+      response_meta_json: string
+    }[]
+    return { summary: JSON.parse(row.summary_json), results: res.map((r) => JSON.parse(r.response_meta_json)) }
+  }
+
+  deleteRun(runId: string): void {
+    this.db.prepare('DELETE FROM run_results WHERE run_id = ?').run(runId)
+    this.db.prepare('DELETE FROM runs WHERE id = ?').run(runId)
   }
 
   // ---------- history ----------

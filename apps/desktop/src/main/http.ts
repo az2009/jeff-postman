@@ -2,17 +2,18 @@ import http from 'node:http'
 import https from 'node:https'
 import zlib from 'node:zlib'
 import { readFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import tls from 'node:tls'
+import net from 'node:net'
 import { randomInt, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import type { Socket } from 'node:net'
-import type { HttpResponse, HttpTimings, SendInput, SendResult, SentRequest } from '@shared/types'
+import { DEFAULT_SETTINGS, type AppSettings, type HttpResponse, type HttpTimings, type SendInput, type SendResult, type SentRequest } from '@shared/types'
+import type { CookieJar } from '@shared/cookies'
 import { activeBody, autoContentType, fileName, mimeFromPath, normalizeUrl, RAW_CONTENT_TYPE } from '@shared/http'
 import { applySimpleAuth, getBool, getParam } from '@shared/auth'
 import { sign, type SignatureMethod } from './oauth1'
 import type { PmAuth } from '@shared/types'
-
-const MAX_REDIRECTS = 10
-const MAX_BODY = 200 * 1024 * 1024
 
 const agents = {
   http: new http.Agent({ keepAlive: true }),
@@ -117,77 +118,138 @@ interface RawResult {
   reused: boolean
 }
 
-function once(url: URL, method: string, headers: [string, string][], data: Buffer | null, signal: AbortSignal): Promise<RawResult> {
+export interface TlsOptions {
+  rejectUnauthorized: boolean
+  ca?: (string | Buffer)[]
+  cert?: Buffer
+  key?: Buffer
+  pfx?: Buffer
+  passphrase?: string
+}
+
+export interface ProxyRoute {
+  host: string
+  port: number
+  authorization?: string
+}
+
+interface OnceOptions {
+  tls: TlsOptions
+  proxy: ProxyRoute | null
+  maxBody: number
+}
+
+function once(url: URL, method: string, headers: [string, string][], data: Buffer | null, signal: AbortSignal, o: OnceOptions): Promise<RawResult> {
   return new Promise((resolve, reject) => {
     const isHttps = url.protocol === 'https:'
     const t0 = performance.now()
     const t: Record<string, number> = {}
     let reused = false
     let remoteAddress: string | null = null
+    const hostname = url.hostname.replace(/^\[|\]$/g, '')
+    const port = Number(url.port || (isHttps ? 443 : 80))
 
-    const req = (isHttps ? https : http).request(
-      {
+    let options: https.RequestOptions
+    if (o.proxy && !isHttps) {
+      // HTTP pelo proxy: pede a URL absoluta ao proxy
+      const h = [...headers]
+      if (o.proxy.authorization) h.push(['Proxy-Authorization', o.proxy.authorization])
+      options = { host: o.proxy.host, port: o.proxy.port, path: url.href, method, headers: h as unknown as http.OutgoingHttpHeaders, agent: agents.http, signal }
+    } else if (o.proxy && isHttps) {
+      // HTTPS pelo proxy: túnel CONNECT e TLS por dentro dele
+      const proxy = o.proxy
+      options = {
+        host: hostname,
+        port,
+        path: `${url.pathname}${url.search}`,
+        method,
+        headers: headers as unknown as http.OutgoingHttpHeaders,
+        // sem agent: com agent (mesmo agent:false) o Node ignora o createConnection
+        signal,
+        createConnection: ((_opts: unknown, cb: (err: Error | null, sock?: Socket) => void) => {
+          const connectHeaders: Record<string, string> = { Host: `${hostname}:${port}` }
+          if (proxy.authorization) connectHeaders['Proxy-Authorization'] = proxy.authorization
+          const creq = http.request({ host: proxy.host, port: proxy.port, method: 'CONNECT', path: `${hostname}:${port}`, headers: connectHeaders })
+          creq.on('connect', (res, socket) => {
+            if (res.statusCode !== 200) {
+              socket.destroy()
+              cb(Object.assign(new Error(`O proxy recusou o túnel para ${hostname}:${port} (${res.statusCode} ${res.statusMessage ?? ''})`), { code: 'EPROXY' }))
+              return
+            }
+            t.connect = performance.now()
+            const sock = tls.connect({ socket, servername: net.isIP(hostname) ? undefined : hostname, ...o.tls })
+            sock.once('secureConnect', () => (t.secure = performance.now()))
+            cb(null, sock)
+          })
+          creq.on('error', (e) => cb(Object.assign(e, { message: `Falha no proxy ${proxy.host}:${proxy.port}: ${e.message}` })))
+          creq.end()
+          return undefined
+        }) as unknown as https.RequestOptions['createConnection']
+      }
+    } else {
+      options = {
         protocol: url.protocol,
-        hostname: url.hostname.replace(/^\[|\]$/g, ''),
+        hostname,
         port: url.port || undefined,
         path: `${url.pathname}${url.search}`,
         method,
         headers: headers as unknown as http.OutgoingHttpHeaders,
         agent: isHttps ? agents.https : agents.http,
-        rejectUnauthorized: true,
-        signal
-      },
-      (res) => {
-        t.firstByte = performance.now()
-        const chunks: Buffer[] = []
-        let size = 0
-        res.on('data', (c: Buffer) => {
-          size += c.length
-          if (size > MAX_BODY) {
-            req.destroy(new Error(`Resposta maior que ${MAX_BODY / 1024 / 1024} MB`))
-            return
-          }
-          chunks.push(c)
-        })
-        res.on('error', reject)
-        res.on('end', () => {
-          t.end = performance.now()
-          const start = t.socket ?? t0
-          const afterDns = t.lookup ?? start
-          const afterTcp = t.connect ?? afterDns
-          const afterTls = t.secure ?? afterTcp
-          resolve({
-            status: res.statusCode ?? 0,
-            statusText: res.statusMessage ?? '',
-            httpVersion: res.httpVersion,
-            rawHeaders: res.rawHeaders,
-            body: Buffer.concat(chunks),
-            remoteAddress,
-            reused,
-            timings: {
-              dns: t.lookup ? t.lookup - start : 0,
-              tcp: t.connect ? t.connect - afterDns : 0,
-              tls: t.secure ? t.secure - afterTcp : 0,
-              ttfb: t.firstByte - (reused ? t0 : afterTls),
-              download: t.end - t.firstByte,
-              total: t.end - t0
-            }
-          })
-        })
+        signal,
+        ...(isHttps ? o.tls : {})
       }
-    )
+    }
 
-    req.on('socket', (s: Socket) => {
-      t.socket = performance.now()
-      const capture = () => (remoteAddress = s.remoteAddress ?? null)
-      if (s.connecting) {
-        s.once('lookup', () => (t.lookup = performance.now()))
-        s.once('connect', () => ((t.connect = performance.now()), capture()))
-        s.once('secureConnect', () => (t.secure = performance.now()))
-      } else {
+    const req = (isHttps ? https : http).request(options, (res) => {
+      t.firstByte = performance.now()
+      const chunks: Buffer[] = []
+      let size = 0
+      res.on('data', (c: Buffer) => {
+        size += c.length
+        if (size > o.maxBody) {
+          req.destroy(Object.assign(new Error(`Resposta maior que ${Math.round(o.maxBody / 1024 / 1024)} MB (ajuste em Settings)`), { code: 'ETOOBIG' }))
+          return
+        }
+        chunks.push(c)
+      })
+      res.on('error', reject)
+      res.on('end', () => {
+        t.end = performance.now()
+        const start = t.socket ?? t0
+        const afterDns = t.lookup ?? start
+        const afterTcp = t.connect ?? afterDns
+        const afterTls = t.secure ?? afterTcp
+        resolve({
+          status: res.statusCode ?? 0,
+          statusText: res.statusMessage ?? '',
+          httpVersion: res.httpVersion,
+          rawHeaders: res.rawHeaders,
+          body: Buffer.concat(chunks),
+          remoteAddress,
+          reused,
+          timings: {
+            dns: t.lookup ? t.lookup - start : 0,
+            tcp: t.connect ? t.connect - afterDns : 0,
+            tls: t.secure ? t.secure - afterTcp : 0,
+            ttfb: t.firstByte - (reused ? t0 : afterTls),
+            download: t.end - t.firstByte,
+            total: t.end - t0
+          }
+        })
+      })
+    })
+
+    req.on('socket', (sock: Socket) => {
+      t.socket ??= performance.now()
+      const capture = () => (remoteAddress = sock.remoteAddress ?? null)
+      if (sock.connecting) {
+        sock.once('lookup', () => (t.lookup = performance.now()))
+        sock.once('connect', () => ((t.connect = performance.now()), capture()))
+        sock.once('secureConnect', () => (t.secure = performance.now()))
+      } else if (!o.proxy) {
         reused = true
         capture()
-      }
+      } else capture()
     })
     req.on('error', reject)
     req.end(data ?? undefined)
@@ -223,10 +285,98 @@ function pairs(raw: string[]): [string, string][] {
   return out
 }
 
-export async function send(input: SendInput, appVersion: string): Promise<SendResult> {
+/** Opções do envio que vêm das configurações e da requisição (protocolProfileBehavior do Postman). */
+export interface SendOptions {
+  settings?: AppSettings
+  cookieJar?: CookieJar | null
+}
+
+function behavior(input: SendInput, st: AppSettings) {
+  const ppb = (input.doc.protocolProfileBehavior ?? {}) as Record<string, unknown>
+  const bool = (k: string, d: boolean) => (typeof ppb[k] === 'boolean' ? (ppb[k] as boolean) : d)
+  const num = (k: string, d: number) => (typeof ppb[k] === 'number' && Number.isFinite(ppb[k]) ? (ppb[k] as number) : d)
+  return {
+    followRedirects: bool('followRedirects', st.followRedirects),
+    followOriginalHttpMethod: bool('followOriginalHttpMethod', false),
+    maxRedirects: Math.max(0, num('maxRedirects', st.maxRedirects)),
+    strictSSL: bool('strictSSL', st.sslVerification),
+    disableCookies: bool('disableCookies', !st.sendCookies)
+  }
+}
+
+const fileCache = new Map<string, Buffer>()
+function readCached(path: string): Buffer {
+  let b = fileCache.get(path)
+  if (!b) {
+    b = readFileSync(path)
+    fileCache.set(path, b)
+  }
+  return b
+}
+export function clearCertCache(): void {
+  fileCache.clear()
+}
+
+function hostMatches(pattern: string, url: URL): boolean {
+  const [h, p] = pattern.trim().toLowerCase().split(':')
+  if (!h) return false
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80')
+  if (p && p !== port) return false
+  const host = url.hostname.toLowerCase()
+  return h.startsWith('*.') ? host === h.slice(2) || host.endsWith(h.slice(1)) : host === h
+}
+
+function tlsFor(url: URL, st: AppSettings, strict: boolean): TlsOptions {
+  const o: TlsOptions = { rejectUnauthorized: strict }
+  if (st.ca.enabled && st.ca.path) o.ca = [...tls.rootCertificates, readCached(st.ca.path)]
+  const cert = st.clientCerts.find((c) => hostMatches(c.host, url))
+  if (cert) {
+    if (cert.pfxPath) o.pfx = readCached(cert.pfxPath)
+    if (cert.crtPath) o.cert = readCached(cert.crtPath)
+    if (cert.keyPath) o.key = readCached(cert.keyPath)
+    if (cert.passphrase) o.passphrase = cert.passphrase
+  }
+  return o
+}
+
+function proxyFor(url: URL, st: AppSettings): ProxyRoute | null {
+  const p = st.proxy
+  if (!p.enabled || !p.host) return null
+  const host = url.hostname.toLowerCase()
+  const bypass = p.bypass
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean)
+  if (bypass.some((b) => (b.startsWith('*.') ? host.endsWith(b.slice(1)) : b.startsWith('.') ? host.endsWith(b) : host === b))) return null
+  return {
+    host: p.host,
+    port: p.port || 8080,
+    authorization: p.auth ? 'Basic ' + Buffer.from(`${p.username}:${p.password}`).toString('base64') : undefined
+  }
+}
+
+/** Header Cookie do jar, a menos que o usuário tenha posto o dele. */
+function withCookies(headers: [string, string][], jar: CookieJar | null, url: URL): [string, string][] {
+  if (!jar || headers.some(([k]) => k.toLowerCase() === 'cookie')) return headers
+  const c = jar.header(url)
+  return c ? [...headers, ['Cookie', c]] : headers
+}
+
+export async function send(input: SendInput, appVersion: string, opts: SendOptions = {}): Promise<SendResult> {
   const { requestId } = input
+  const st = opts.settings ?? DEFAULT_SETTINGS
+  const bh = behavior(input, st)
+  const jar = bh.disableCookies ? null : (opts.cookieJar ?? null)
   const controller = new AbortController()
   inflight.set(requestId, controller)
+  let timedOut = false
+  const timer =
+    st.requestTimeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true
+          controller.abort()
+        }, st.requestTimeoutMs)
+      : null
   let sent: SentRequest | null = null
   try {
     let url = new URL(normalizeUrl(input.doc.request.url.raw))
@@ -236,20 +386,22 @@ export async function send(input: SendInput, appVersion: string): Promise<SendRe
     url = applied.url
     built = applied.built
     const authHeaders = applied.headers
-    let headers = buildHeaders(input, built, appVersion, url.host, authHeaders)
-    sent = { method, url: url.toString(), headers, bodySize: built.data?.length ?? 0 }
+    let headers = withCookies(buildHeaders(input, built, appVersion, url.host, authHeaders), jar, url)
+    sent = { method, url: url.toString(), headers, bodySize: built.data?.length ?? 0, bodyPreview: preview(built) }
+    const onceOpts = (u: URL): OnceOptions => ({ tls: tlsFor(u, st, bh.strictSSL), proxy: proxyFor(u, st), maxBody: st.maxResponseMb * 1024 * 1024 })
 
     let redirects = 0
-    let raw = await once(url, method, headers, built.data, controller.signal)
+    let raw = await once(url, method, headers, built.data, controller.signal, onceOpts(url))
+    jar?.store(url, setCookies(raw.rawHeaders))
     const firstTimings = raw.timings
     let totalMs = raw.timings.total
 
-    while ([301, 302, 303, 307, 308].includes(raw.status) && redirects < MAX_REDIRECTS) {
+    while (bh.followRedirects && [301, 302, 303, 307, 308].includes(raw.status) && redirects < bh.maxRedirects) {
       const location = headerValue(raw.rawHeaders, 'location')
       if (!location) break
       const next = new URL(location, url)
-      // 303 sempre vira GET; 301/302 com POST também (comportamento padrão do Postman e navegadores)
-      if (raw.status === 303 || ((raw.status === 301 || raw.status === 302) && method === 'POST')) {
+      // 303 sempre vira GET; 301/302 com POST também, a menos que "seguir o método original" esteja ligado
+      if (raw.status === 303 || (!bh.followOriginalHttpMethod && (raw.status === 301 || raw.status === 302) && method === 'POST')) {
         method = 'GET'
         built = { data: null, contentType: null }
       }
@@ -261,8 +413,10 @@ export async function send(input: SendInput, appVersion: string): Promise<SendRe
         if (crossOrigin && (l === 'authorization' || l === 'cookie')) return false
         return true
       })
-      sent = { method, url: url.toString(), headers, bodySize: built.data?.length ?? 0 }
-      raw = await once(url, method, headers, built.data, controller.signal)
+      headers = withCookies(headers, jar, url)
+      sent = { method, url: url.toString(), headers, bodySize: built.data?.length ?? 0, bodyPreview: preview(built) }
+      raw = await once(url, method, headers, built.data, controller.signal, onceOpts(url))
+      jar?.store(url, setCookies(raw.rawHeaders))
       totalMs += raw.timings.total
       redirects++
     }
@@ -290,19 +444,46 @@ export async function send(input: SendInput, appVersion: string): Promise<SendRe
     }
     return { ok: true, response }
   } catch (err) {
-    const e = err as NodeJS.ErrnoException
-    const cancelled = controller.signal.aborted
+    const e = err as NodeJS.ErrnoException & { port?: number }
+    const cancelled = controller.signal.aborted && !timedOut
+    let viaProxy: ProxyRoute | null = null
+    try {
+      viaProxy = proxyFor(new URL(normalizeUrl(sent?.url ?? input.doc.request.url.raw)), st)
+    } catch {
+      // URL inválida
+    }
+    if (viaProxy && !cancelled && !timedOut && ['ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET', 'EHOSTUNREACH'].includes(e.code ?? '') && (e.port === viaProxy.port || e.code === 'ENOTFOUND')) {
+      return {
+        ok: false,
+        requestId,
+        cancelled: false,
+        code: e.code ?? null,
+        error: `Proxy ${viaProxy.host}:${viaProxy.port} inacessível (${e.code}). Confira o proxy em Settings → Proxy`,
+        request: sent
+      }
+    }
     return {
       ok: false,
       requestId,
       cancelled,
-      code: e.code ?? null,
-      error: cancelled ? 'Request cancelled' : describe(e, sent?.url ?? input.doc.request.url.raw),
+      code: timedOut ? 'ETIMEDOUT' : (e.code ?? null),
+      error: timedOut
+        ? `Request timed out: sem resposta em ${st.requestTimeoutMs} ms (ajuste o timeout em Settings)`
+        : cancelled
+          ? 'Request cancelled'
+          : describe(e, sent?.url ?? input.doc.request.url.raw),
       request: sent
     }
   } finally {
+    if (timer) clearTimeout(timer)
     inflight.delete(requestId)
   }
+}
+
+function setCookies(raw: string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < raw.length; i += 2) if (raw[i].toLowerCase() === 'set-cookie') out.push(raw[i + 1])
+  return out
 }
 
 function describe(e: NodeJS.ErrnoException, target: string): string {
@@ -325,6 +506,13 @@ function describe(e: NodeJS.ErrnoException, target: string): string {
       return 'Invalid URL'
     case 'ENOENT':
       return `File not found: ${(e as { path?: string }).path ?? ''}`
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'SELF_SIGNED_CERT_IN_CHAIN':
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY':
+    case 'CERT_HAS_EXPIRED':
+    case 'ERR_TLS_CERT_ALTNAME_INVALID':
+      return `SSL Error: ${e.code} (${host}). Desligue "SSL certificate verification" em Settings (ou na aba Settings da requisição) ou adicione o certificado da CA`
     default:
       return e.message || String(e)
   }
@@ -382,4 +570,15 @@ function applyAuth(auth: PmAuth | undefined, method: string, url: URL, built: Bu
     out.url = u
   }
   return out
+}
+
+/** Corpo enviado como texto para o console (binário vira um resumo). */
+function preview(b: BuiltBody): string | undefined {
+  if (!b.data || b.data.length === 0) return undefined
+  const ct = (b.contentType ?? '').toLowerCase()
+  const textual = !ct || /json|xml|text|javascript|x-www-form-urlencoded|multipart\/form-data|html|csv/.test(ct)
+  if (!textual) return `<${b.data.length} bytes, ${ct}>`
+  const max = 64 * 1024
+  const t = b.data.subarray(0, max).toString('utf8')
+  return b.data.length > max ? `${t}\n… (${b.data.length - max} bytes a mais)` : t
 }

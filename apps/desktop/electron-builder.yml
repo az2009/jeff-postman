@@ -6,6 +6,15 @@ directories:
 files:
   - out/**/*
   - package.json
+# o atalho do terminal: jeff-postman.cmd run colecao.json (usa o Node embutido no app)
+extraResources:
+  - from: build/jeff-postman.cmd
+    to: jeff-postman.cmd
+compression: maximum
+# só as traduções do Chromium que o app usa (as outras ~50 MB não fazem falta)
+electronLanguages:
+  - pt-BR
+  - en-US
 win:
   target:
     - target: nsis

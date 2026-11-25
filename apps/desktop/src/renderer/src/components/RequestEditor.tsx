@@ -7,6 +7,8 @@ import { activeBody, autoHeaders, CALCULATED, userOverrides } from '@shared/http
 import { authHeaderName } from '@shared/auth'
 import type { InheritedAuth } from '@shared/types'
 import { AuthEditor } from './AuthEditor'
+import { ScriptsEditor, hasScripts } from './ScriptsEditor'
+import { RequestSettings } from './RequestSettings'
 import { api } from '../api'
 import { KeyValueTable } from './KeyValueTable'
 import { BodyEditor } from './BodyEditor'
@@ -59,6 +61,9 @@ export function RequestEditor({ tab }: { tab: OpenTab }) {
         <button className="btn ghost" disabled={!!tab.itemId && !tab.dirty} onClick={() => save()} title="Ctrl+S">
           Save
         </button>
+        <button className="icon-btn code-btn" title="Code snippet" onClick={() => useStore.getState().openModal('code')}>
+          {'</>'}
+        </button>
       </div>
 
       <div className="url-bar">
@@ -105,11 +110,13 @@ export function RequestEditor({ tab }: { tab: OpenTab }) {
             {t.label}
             {counts[t.id] ? <span className="count">({counts[t.id]})</span> : null}
             {t.id === 'body' && activeBody(request.body) ? <span className="dot-green" /> : null}
+            {t.id === 'scripts' && hasScripts(tab.doc.event) ? <span className="dot-green" /> : null}
+            {t.id === 'settings' && tab.doc.protocolProfileBehavior && Object.keys(tab.doc.protocolProfileBehavior).length ? <span className="dot-green" /> : null}
           </button>
         ))}
       </div>
 
-      <div className={`subtab-body ${tab.subTab === 'body' ? 'fill' : ''}`}>
+      <div className={`subtab-body ${tab.subTab === 'body' || tab.subTab === 'scripts' ? 'fill' : ''}`}>
         {tab.subTab === 'params' && (
           <>
             <KeyValueTable
@@ -178,8 +185,32 @@ export function RequestEditor({ tab }: { tab: OpenTab }) {
             }
           />
         )}
-        {tab.subTab === 'scripts' && <Placeholder text="Pre-request e Post-response com a API pm entram na fase 6." />}
-        {tab.subTab === 'settings' && <Placeholder text="Timeout, redirects e SSL entram na fase 9." />}
+        {tab.subTab === 'scripts' && (
+          <ScriptsEditor
+            events={tab.doc.event}
+            onChange={(event) =>
+              update((d) => {
+                const n = { ...d }
+                if (event.length) n.event = event
+                else delete n.event
+                return n
+              })
+            }
+          />
+        )}
+        {tab.subTab === 'settings' && (
+          <RequestSettings
+            doc={tab.doc}
+            onChange={(ppb) =>
+              update((d) => {
+                const n = { ...d }
+                if (ppb) n.protocolProfileBehavior = ppb
+                else delete n.protocolProfileBehavior
+                return n
+              })
+            }
+          />
+        )}
       </div>
     </div>
   )

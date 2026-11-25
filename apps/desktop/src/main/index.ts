@@ -6,6 +6,9 @@ import { registerIpc } from './ipc'
 
 let repo: Repo | null = null
 
+// testes (E2E e manuais) rodam com uma pasta de dados própria, sem tocar no banco do usuário
+if (process.env.JEFF_POSTMAN_USER_DATA) app.setPath('userData', process.env.JEFF_POSTMAN_USER_DATA)
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1440,
@@ -69,7 +72,7 @@ app.on('window-all-closed', () => {
  * antigo (%APPDATA%\Carteiro\carteiro.db, com -wal e -shm). A pasta antiga fica como cópia de segurança.
  */
 function migrateFromCarteiro(newPath: string): void {
-  if (existsSync(newPath)) return
+  if (process.env.JEFF_POSTMAN_USER_DATA || existsSync(newPath)) return
   const old = join(app.getPath('appData'), 'Carteiro', 'carteiro.db')
   if (!existsSync(old)) return
   mkdirSync(dirname(newPath), { recursive: true })

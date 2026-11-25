@@ -4,7 +4,42 @@ Plano completo: [PLANO.md](PLANO.md).
 
 ## Estado
 
-**Fases 0 a 5 concluídas em 24/11/2026.**
+**Todas as 9 fases do plano concluídas em 25/11/2026.** Testes: 82 automáticos (`npm test`; 87 com os arquivos reais em `PM_FILES`) e 4 de ponta a ponta com o app aberto (`npm run test:e2e`).
+
+Fase 9, acabamento:
+- **Settings** (engrenagem ou Ctrl+,): timeout das requisições, verificação de certificado SSL, seguir redirects e limite, tamanho máximo da resposta, cookies automáticos, tempo limite dos scripts, tema. Guardadas **cifradas** (têm senhas).
+- **Proxy:** HTTP e HTTPS (túnel CONNECT), com usuário e senha e lista de exceções (`*.dominio.com`).
+- **Certificados:** CA extra (PEM) somada às do sistema; certificados de cliente por host (`api.exemplo.com`, `*.exemplo.com:8443`) em CRT+KEY ou PFX com senha (mTLS).
+- **Aba Settings da requisição** (como no Postman, gravada em `protocolProfileBehavior`): SSL, seguir redirects, manter o método original no 301/302, máximo de redirects e desligar cookies, cada um podendo usar o padrão do app.
+- **Cookies:** o app guarda os `Set-Cookie` (regras de domínio, caminho, `Secure` e validade da RFC 6265) e reenvia nas próximas requisições; header `Cookie` manual vence. **Manage Cookies** (rodapé): por domínio, editar valor, apagar, acrescentar e limpar tudo.
+- **Gerar código** (`</>` ao lado do Save): cURL, PowerShell (Invoke-RestMethod), JavaScript fetch e Python requests, com as variáveis e o auth já resolvidos.
+- **Busca Ctrl+K:** requisições por nome ou URL em todas as collections, além de collections e environments; Enter abre.
+- Mensagens de erro claras para SSL, proxy fora do ar e timeout.
+- **Instalador menor:** 111 MB (era 132 MB): as dependências já vão dentro do bundle e só ficam as traduções pt-BR e en-US do Chromium.
+
+Fase 8, Collection Runner:
+- Menu da collection → **Run collection** (ou da pasta → **Run folder**, ou **Runner** no rodapé).
+- **Run order** com marcar/desmarcar e arrastar para reordenar; **iterações**, **intervalo** entre requisições, **data file** CSV (vírgula ou ponto e vírgula, aspas) ou JSON com prévia; environment; "Keep variable values" (grava no fim o que os scripts mudaram); "Stop run if an error occurs"; "Save responses".
+- Cada linha do data file é uma iteração: `{{coluna}}` e `pm.iterationData.get("coluna")`. Variáveis gravadas por uma requisição valem nas seguintes da mesma execução. `setNextRequest("Nome")` desvia, `setNextRequest(null)` encerra a iteração, `skipRequest()` pula.
+- Resultados ao vivo: cartões (executadas, duração, testes aprovados/reprovados, erros, tempo médio), filtro All/Passed/Failed e por iteração, detalhe de cada teste e da resposta salva; **Stop**; **Export Results** (JSON no formato do Postman); execuções anteriores guardadas. O Runner não suja o History.
+- Medido: 2.000 requisições com 2 scripts cada em ~9 s; memória estável em 3 execuções seguidas (6.000 requisições).
+- **Comando de terminal** (como o Newman): `jeff-postman run colecao.json -e env.json -d dados.csv -n 3 --folder "Pasta" --bail -k --env-var base=... --reporters cli,json --reporter-json-export saida.json`. Código de saída 1 quando algum teste falha (bom para CI). No app instalado: `"<pasta do app>\resources\jeff-postman.cmd" run ...` (usa o Node que vem dentro do app); no projeto: `npm run cli -- run ...`.
+
+Fase 7, Console (Ctrl+Alt+C):
+- Um item por envio, que abre em Network (endereço, HTTP, tempos de DNS/TCP/TLS/espera/download, tamanhos), Request Headers, Request Body, Response Headers e Response Body.
+- `console.log/info/warn/error` dos scripts na ordem em que rodaram, com a origem (collection, pasta, requisição), e as chamadas de `pm.sendRequest`.
+- Busca, filtro por nível, "Hide network", "Show raw log" (texto HTTP cru), **Export** para arquivo `.log`, Clear e altura ajustável.
+
+Fase 6, scripts e testes:
+- **Aba Scripts** (requisição, pasta e collection) com Pre-request e Post-response, editor JavaScript com **autocompletar da API `pm`** e **snippets** do Postman. Collection e pasta: menu → **Scripts**.
+- **Ordem igual à do Postman:** pre-request da collection → pastas (de fora para dentro) → requisição; envio; post-response na mesma ordem.
+- **API `pm`:** `pm.test` (síncrono, `async` e com `done`), `pm.test.skip`, `pm.expect` (Chai 4), `pm.response` (`code`, `status`, `headers`, `json()`, `text()`, `responseTime`, `to.have.status/header/body/jsonBody/jsonSchema/cookie`, `to.be.ok/success/clientError/...`, `to.not...`), `pm.request` (URL, query, método, headers, corpo; alterável no pre-request), `pm.environment`, `pm.globals`, `pm.collectionVariables`, `pm.variables` (precedência e `replaceIn`), `pm.iterationData`, `pm.cookies`, `pm.info`, `pm.sendRequest` (callback ou `await`), `pm.execution.setNextRequest/skipRequest`, `console.*`, `setTimeout`, `require` de lodash, chai, moment, crypto-js, tv4, uuid, atob/btoa. Legado: `tests[...]`, `responseBody`, `responseCode`, `postman.setEnvironmentVariable` etc.
+- **Variáveis alteradas pelos scripts são gravadas** (environment ativo, globals, collection) e a tela atualiza; `pm.variables.set` vale só naquele envio.
+- **Test Results** na resposta com contagem (ex.: `3/4`), filtro All/Passed/Skipped/Failed, mensagem de erro de cada teste e origem (collection/pasta).
+- Erro no pre-request **não envia** a requisição e mostra a causa; `pm.execution.skipRequest()` pula o envio; erro no post-response aparece junto dos testes.
+- **Console** (Ctrl+Alt+C) com cada envio e os `console.log` de cada script, na ordem, com a origem.
+- **Isolamento:** os scripts rodam num worker separado, em contexto `vm` sem acesso ao Node (sem `process`, `require` de módulos do Node, disco ou rede, exceto `pm.sendRequest`); laço infinito é cortado em 5 s, inclusive dentro de callbacks; promessa pendurada para em 15 s; memória do worker limitada a 256 MB.
+- **Testes:** 69 automáticos (`npm test`), incluindo os snippets do Postman, variáveis, mudança da requisição, `pm.sendRequest`, bibliotecas, limites de tempo e 11 tentativas de escapar do isolamento. No app: ordem dos 6 scripts, variáveis gravadas, erro e skip no pre-request, laço infinito, autocompletar. Custo medido: ~1,5 ms a mais por requisição com um script.
 
 Fase 5, autenticação (aba Authorization):
 - **Tipos:** Inherit auth from parent, No Auth, Basic Auth, Bearer Token, API Key (header ou query), OAuth 1.0 e OAuth 2.0, no formato v2.1 do Postman (importa e exporta igual). Todos os campos aceitam `{{variáveis}}`; segredos aparecem mascarados com olho para mostrar.
@@ -56,7 +91,9 @@ Fase 1, envio de requisições:
 
 Fase 0, base: Electron 45 + React 19 + TypeScript (electron-vite); SQLite local em `%APPDATA%\JEFF Postman\jeff-postman.db` pelo `node:sqlite`; IPC tipado com lista de canais permitidos; tela no estilo do Postman com collections, pastas, abas, Params ↔ URL, Bulk Edit, tema escuro e claro; atalhos Ctrl+S, Ctrl+T, Ctrl+W, Ctrl+Alt+C.
 
-Ainda sem efeito (próximas fases): variáveis `{{}}` (fase 3), Import/Export (4), Authorization (5), Scripts e testes (6), Console (7), Runner (8), Settings da requisição, proxy e certificados (9). A verificação de certificado SSL está **ligada** (o Postman vem com ela desligada); a opção de desligar entra na fase 9.
+**Limites conhecidos:** não há workspaces na nuvem, sincronização, mock servers, monitors nem GraphQL/WebSocket/gRPC (GraphQL importado é preservado e exportado, mas não editado). OAuth 2.0 abre o login numa janela do app (sem a opção de usar o navegador do sistema). `require` nos scripts não tem cheerio/xml2js e não há `pm.visualizer`. A verificação SSL vem **ligada** (o Postman vem desligada); desligue em Settings se precisar.
+
+**Seus dados:** `%APPDATA%\JEFF Postman\jeff-postman.db` (SQLite). Tokens OAuth e Settings ficam cifrados com a proteção do Windows. Para testar sem tocar nos seus dados: variável `JEFF_POSTMAN_USER_DATA=<pasta>`.
 
 ## Comandos (na pasta `apps/desktop`)
 
@@ -73,19 +110,35 @@ npm run typecheck
 ```
 
 ```powershell
+npm test
+```
+
+```powershell
+npm run test:e2e
+```
+
+```powershell
 npm run dist
 ```
 
-`npm run dist` gera em `apps/desktop/dist/` o instalador `JEFF Postman-Setup-<versão>.exe` e o `JEFF Postman-<versão>-portable.exe` (sem assinatura de código).
+```powershell
+npm run cli -- run caminho\colecao.json -e caminho\env.json -d caminho\dados.csv
+```
+
+`npm run dist` gera em `apps/desktop/dist/` o instalador `JEFF Postman-Setup-<versão>.exe` e o `JEFF Postman-<versão>-portable.exe` (sem assinatura de código; o Windows SmartScreen avisa na primeira vez).
 
 ## Estrutura
 
 ```
 apps/desktop/
-  src/shared/types.ts        # modelo e contrato do IPC
-  src/main/index.ts          # janela
-  src/main/db.ts             # SQLite, migrações e repositório
-  src/main/ipc.ts            # handlers do IPC
-  src/preload/index.ts       # ponte segura (window.jeffPostman)
-  src/renderer/src/          # React: App, store (zustand), components/, styles.css
+  src/shared/      # código puro (main, tela, CLI e testes): tipos e contrato do IPC, variáveis,
+                   # auth, conversor Postman, cURL, data files, cookies, geração de código
+  src/main/        # processo principal: index (janela), db (SQLite), ipc, http (envio),
+                   # execute (pipeline com scripts), runner, oauth1, oauth2(-core), scripts
+  src/main/sandbox # worker dos scripts: pm-runtime.js (API pm), run.ts (vm isolado)
+  src/preload/     # ponte segura (window.jeffPostman), só canais da lista
+  src/renderer/src # React: App, store (zustand), components/, styles.css
+  src/cli/         # comando de terminal jeff-postman
+  e2e/             # testes de ponta a ponta (Playwright + Electron)
+  build/jeff-postman.cmd  # atalho do CLI que vai junto do app instalado
 ```

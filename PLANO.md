@@ -30,9 +30,9 @@ App desktop para Windows, offline e local, com as funções básicas do Postman 
 | Componentes | Radix UI + CSS próprio (tokens no tema escuro/claro do Postman) | Controle fino do visual |
 | Editor de código | **Monaco** (body, scripts, resposta) | Autocompletar da API `pm`, realce JSON/XML/JS |
 | Árvore e listas | `react-arborist` (árvore) e virtualização (`@tanstack/react-virtual`) para console e histórico | Collections grandes sem travar |
-| HTTP | `node:http`/`node:https` no processo principal, com agentes keep-alive | Sem dependência; tempos exatos por evento do socket (DNS, TCP, TLS, TTFB, download); redirects e descompactação (gzip, deflate, br) feitos no app |
+| HTTP | `node:http`/`node:https` no processo principal, com agentes keep-alive; proxy com túnel CONNECT, CA extra e mTLS por host | Sem dependência; tempos exatos por evento do socket (DNS, TCP, TLS, TTFB, download); redirects e descompactação (gzip, deflate, br) feitos no app |
 | Banco local | **SQLite** pelo `node:sqlite` nativo do Node 24 que vem no Electron (WAL) | Local, transacional, sem módulo nativo para compilar (o `better-sqlite3` não tem binário para o Electron 45 e a máquina não tem Visual Studio) |
-| Sandbox de script | `isolated-vm` (V8 isolado) num utility process; reserva: `node:vm` em worker | Script do usuário não toca Node nem disco |
+| Sandbox de script | `node:vm` dentro de um worker thread (o `isolated-vm` precisa de compilação nativa, indisponível nesta máquina); contexto sem protótipo, só texto cruza a fronteira, tempo limite inclusive em callbacks, worker encerrado se travar | Script do usuário não toca Node nem disco (11 tentativas de fuga testadas) |
 | Bibliotecas do sandbox | chai, lodash, moment, crypto-js, tv4/ajv, cheerio, xml2js, uuid (as mesmas que o Postman expõe via `require`) | Compatibilidade com scripts existentes |
 | Formato Postman | `postman-collection` (SDK oficial, Apache-2.0) para ler/escrever + validação com o JSON Schema v2.1 | Fidelidade na importação/exportação |
 | Data files | `papaparse` (CSV) | |
@@ -170,24 +170,26 @@ Resultado dos testes: pass/fail/skip com mensagem de erro, mostrados na aba Test
 | 3. Variáveis ✅ 24/11 | Environments, globals, collection vars, `{{}}` com realce, dinâmicas | Precedência igual à do Postman (testes de unidade) | 1 semana |
 | 4. Import/Export ✅ 24/11 | v2.1/v2.0, environment, cURL | Ida e volta sem perda com 3 collections reais | 1 semana |
 | 5. Auth ✅ 24/11 | Basic, Bearer, API Key, herança, OAuth 1.0, OAuth 2.0 (5 grants + PKCE), gerenciador de tokens | Vetores RFC 5849; fluxo real com um provedor (ex.: GitHub ou Keycloak local) | 2 semanas |
-| 6. Scripts e testes | Sandbox, API `pm`, snippets, Test Results, `pm.sendRequest` | Bateria de scripts típicos do Postman rodando igual | 2,5 semanas |
-| 7. Console | Console completo | Mostra requisição crua, logs, erros | 0,5 semana |
-| 8. Runner | Runner com CSV/JSON, iterações, delay, resultado, exportação, CLI | 100 iterações × 20 requisições sem vazamento de memória | 2 semanas |
-| 9. Acabamento | Atalhos, cookies, settings (timeout, SSL, proxy, certificados), gerar código, testes E2E, auto-update opcional | Checklist de paridade da seção 12 | 1,5 semana |
+| 6. Scripts e testes ✅ 24/11 | Sandbox, API `pm`, snippets, Test Results, `pm.sendRequest` | Bateria de scripts típicos do Postman rodando igual | 2,5 semanas |
+| 7. Console ✅ 25/11 | Console completo | Mostra requisição crua, logs, erros | 0,5 semana |
+| 8. Runner ✅ 25/11 | Runner com CSV/JSON, iterações, delay, resultado, exportação, CLI | 100 iterações × 20 requisições sem vazamento de memória | 2 semanas |
+| 9. Acabamento ✅ 25/11 | Atalhos, cookies, settings (timeout, SSL, proxy, certificados), gerar código, testes E2E, auto-update opcional | Checklist de paridade da seção 12 | 1,5 semana |
 
 Total aproximado: **15 semanas** para uma pessoa; com dois desenvolvedores, fases 5–8 rodam em paralelo (~9 semanas).
 
 ## 12. Checklist de paridade com o Postman (usar o Postman local como gabarito)
 
 Para cada item, fazer no Postman 12.38 e no clone e comparar:
-- [ ] Mesma requisição gera os mesmos headers automáticos e o mesmo corpo (conferir no console de ambos).
-- [ ] Assinatura OAuth 1.0 idêntica com timestamp e nonce fixos.
-- [ ] Token OAuth 2.0 obtido nos 5 grants.
-- [ ] Ordem de execução dos scripts collection → pasta → requisição.
-- [ ] `setNextRequest` no Runner desvia o fluxo igual.
-- [ ] Runner com CSV de 3 linhas faz 3 iterações e preenche `{{coluna}}`.
-- [ ] Collection exportada pelo clone abre no Postman sem aviso, e vice-versa.
-- [ ] Atalhos: Ctrl+Enter (Send), Ctrl+S, Ctrl+T, Ctrl+W, Ctrl+Alt+C, Ctrl+K.
+Situação em 25/11/2026 (o Postman local exige login, então os itens marcados com ⚠️ foram conferidos contra servidores de teste e especificações, não lado a lado com o Postman):
+
+- [~] ⚠️ Mesma requisição gera os mesmos headers automáticos e o mesmo corpo: conferido num servidor de eco (headers automáticos no padrão do Postman, com `JeffPostman-Token` e `JeffPostmanRuntime`); falta comparar no console do Postman.
+- [x] Assinatura OAuth 1.0 idêntica com timestamp e nonce fixos: vetores oficiais da RFC 5849 (1.2 e 3.4.1.1) e do Twitter, e servidor com implementação independente.
+- [x] Token OAuth 2.0 obtido nos 5 grants (servidor OAuth local, inclusive PKCE e os 3 fluxos com janela de login).
+- [x] Ordem de execução dos scripts collection → pasta → requisição.
+- [x] `setNextRequest` no Runner desvia o fluxo (nome e `null`).
+- [x] Runner com CSV de 3 linhas faz 3 iterações e preenche `{{coluna}}`.
+- [~] ⚠️ Collection exportada pelo clone abre no Postman: ida e volta sem diferença com 2 collections e 1 environment reais exportados do Postman 12; falta importar no Postman um arquivo exportado pelo clone.
+- [x] Atalhos: Ctrl+Enter (Send), Ctrl+S, Ctrl+T, Ctrl+W, Ctrl+Alt+C, Ctrl+K (e Ctrl+O import, Ctrl+D duplicar, Ctrl+, settings).
 
 Antes da fase 0, abrir o Postman local e registrar capturas de cada tela (requisição, auth OAuth 1/2, scripts, console, runner, import/export) em `referencia/` para servir de gabarito visual.
 

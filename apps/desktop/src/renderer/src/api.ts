@@ -7,6 +7,9 @@ export const api: JeffPostmanBridge =
 function createMemoryStub(): JeffPostmanBridge {
   const state = new Map<string, unknown>()
   return {
+    on() {
+      return () => undefined
+    },
     async invoke(channel, ...args) {
       switch (channel) {
         case 'state:get':

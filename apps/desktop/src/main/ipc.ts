@@ -1,11 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import type { IpcChannel, IpcContract } from '@shared/types'
 import type { Repo } from './db'
-import { cancel, send } from './http'
+import { cancel, clearCertCache } from './http'
+import { executeRequest } from './execute'
+import { exportRun, requestOrder, startRun, stopRun } from './runner'
+import { parseDataFile } from '@shared/datafile'
 import { configFrom, getNewToken, refreshToken } from './oauth2'
-import { getBool, getParam, resolveAuth } from '@shared/auth'
-import type { PmAuth } from '@shared/types'
-import { makeLookup, resolveDoc, type Scope } from '@shared/variables'
+import { getParam, resolveAuth } from '@shared/auth'
+import { makeLookup, type Scope } from '@shared/variables'
 import { countRequests, exportCollection, exportEnvironment, parsePostman, safeFileName } from '@shared/postman'
 import { looksLikeCurl, parseCurl } from '@shared/curl'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -51,6 +53,9 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     'collections:setAuth': (id, auth) => repo.setCollectionAuth(id, auth),
     'items:getFolder': (id) => repo.getFolder(id),
     'items:setFolderAuth': (id, auth) => repo.setFolderAuth(id, auth),
+    'collections:getEvents': (id) => repo.getCollectionMeta(id)?.events ?? [],
+    'collections:setEvents': (id, events) => repo.setCollectionEvents(id, events),
+    'items:setFolderEvents': (id, events) => repo.setFolderEvents(id, events),
     'auth:inherited': (collectionId, parentId) => repo.inheritedAuth(collectionId, parentId),
     'oauth2:getToken': async (auth, collectionId, environmentId) => {
       const a = resolveAuth(auth, lookupOf(repo, collectionId, environmentId))
@@ -93,24 +98,7 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     'state:get': (key) => repo.getState(key),
     'state:set': (key, value) => repo.setState(key, value),
     'http:send': async (input) => {
-      const lookup = lookupOf(repo, input.collectionId, input.environmentId)
-      // auth: o da requisição ou o herdado da pasta/collection; variáveis resolvidas
-      let auth: PmAuth | undefined = input.doc.request.auth
-      if (!auth && input.collectionId) {
-        const parent = input.itemId ? repo.parentOf(input.itemId) : null
-        auth = repo.inheritedAuth(input.collectionId, parent).auth ?? undefined
-      }
-      if (auth?.type === 'noauth') auth = undefined
-      auth = resolveAuth(auth, lookup)
-      let refreshed = null
-      if (auth?.type === 'oauth2') {
-        const r = await maybeRefresh(repo, auth)
-        auth = r.auth
-        refreshed = r.refreshed
-      }
-      const resolved = { ...input, doc: resolveDoc(input.doc, lookup), auth }
-      const result = await send(resolved, app.getVersion())
-      if (refreshed && result.ok) result.response.refreshedToken = refreshed
+      const result = await executeRequest(repo, input, app.getVersion())
       if (!(!result.ok && result.cancelled)) {
         repo.addHistory(
           input.doc,
@@ -131,7 +119,54 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     'history:list': (limit) => repo.listHistory(limit),
     'history:get': (id) => repo.getHistory(id),
     'history:clear': () => repo.clearHistory(),
-    'history:delete': (ids) => repo.deleteHistory(ids)
+    'history:delete': (ids) => repo.deleteHistory(ids),
+    'runner:order': (collectionId, folderId) => requestOrder(repo, collectionId, folderId),
+    'runner:start': (config) =>
+      startRun(repo, config, app.getVersion(), (ev) => {
+        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('runner:event', ev)
+      }),
+    'runner:stop': (runId) => stopRun(runId),
+    'runner:list': (collectionId) => repo.listRuns(collectionId),
+    'runner:get': (runId) => repo.getRun(runId),
+    'runner:delete': (runId) => repo.deleteRun(runId),
+    'runner:pickData': async () => {
+      const win = BrowserWindow.getFocusedWindow()
+      const opts: Electron.OpenDialogOptions = {
+        title: 'Data file (CSV ou JSON)',
+        properties: ['openFile'],
+        filters: [{ name: 'CSV ou JSON', extensions: ['csv', 'json', 'txt'] }]
+      }
+      const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+      if (r.canceled || !r.filePaths[0]) return null
+      const name = basename(r.filePaths[0])
+      const parsed = parseDataFile(name, await readFile(r.filePaths[0], 'utf8'))
+      return { name, ...parsed }
+    },
+    'runner:export': async (runId) => {
+      const run = repo.getRun(runId)
+      if (!run) throw new Error('Execução não encontrada')
+      const stamp = new Date(run.summary.startedAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      return saveJson(`${safeFileName(run.summary.name)}.postman_test_run-${stamp}.json`, exportRun(run.summary, run.results))
+    },
+    'settings:get': () => repo.getSettings(),
+    'settings:set': (s) => {
+      clearCertCache()
+      return repo.setSettings(s)
+    },
+    'cookies:list': () => repo.listCookies(),
+    'cookies:save': (c, replace) => repo.saveCookie(c, replace),
+    'cookies:delete': (domain, path, name) => repo.deleteCookie(domain, path, name),
+    'cookies:clear': (domain) => repo.clearCookies(domain),
+    'search:requests': (q) => repo.searchRequests(q),
+    'console:save': async (text) => {
+      const win = BrowserWindow.getFocusedWindow()
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      const opts: Electron.SaveDialogOptions = { title: 'Exportar console', defaultPath: `console-${stamp}.log`, filters: [{ name: 'Log', extensions: ['log', 'txt'] }] }
+      const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+      if (r.canceled || !r.filePath) return null
+      await writeFile(r.filePath, text, 'utf8')
+      return r.filePath
+    }
   }
 
   for (const channel of Object.keys(handlers) as IpcChannel[]) {
@@ -189,22 +224,4 @@ function lookupOf(repo: Repo, collectionId: string | null, environmentId: string
   const env = environmentId ? repo.getEnvironment(environmentId) : null
   if (env) scopes.push({ name: 'environment', values: env.values })
   return makeLookup(scopes)
-}
-
-/**
- * OAuth 2.0 no envio: se o auth aponta para um token guardado (jp_tokenId), usa o token atual dele e,
- * com "Auto-refresh" ligado, renova antes de vencer (30 s de folga) quando há refresh_token.
- */
-async function maybeRefresh(repo: Repo, auth: PmAuth) {
-  const id = getParam(auth, 'jp_tokenId')
-  if (!id) return { auth, refreshed: null }
-  let t = repo.getToken(id)
-  if (!t) return { auth, refreshed: null }
-  let refreshed = null
-  if (getBool(auth, 'jp_autoRefresh', true) && t.refreshToken && t.expiresAt && t.expiresAt < Date.now() + 30_000) {
-    t = repo.saveToken(await refreshToken(t, configFrom((k, d = '') => getParam(auth, k, d))))
-    refreshed = t
-  }
-  const list = (auth.oauth2 as { key: string; value: unknown }[]).map((p) => (p.key === 'accessToken' ? { ...p, value: t!.accessToken } : p))
-  return { auth: { ...auth, oauth2: list }, refreshed }
 }

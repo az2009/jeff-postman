@@ -4,6 +4,8 @@ import { formatBytes, formatMs } from '@shared/http'
 import { Icon } from '../icons'
 import { useStore, type RunState } from '../store'
 import { CodeEditor } from './CodeEditor'
+import { TestResults, testCounts } from './TestResults'
+import type { ScriptsReport } from '@shared/types'
 import { decodeText, languageFromContentType, prettyJson } from '../format'
 
 type ResTab = 'body' | 'cookies' | 'headers' | 'tests'
@@ -29,6 +31,12 @@ export function ResponsePane({ run }: { run: RunState | null }) {
         <button className="btn small" onClick={cancel}>Cancel</button>
       </div>
     )
+  if (run.state === 'skipped')
+    return (
+      <div className="response-empty">
+        <p>Requisição pulada pelo pre-request script (pm.execution.skipRequest)</p>
+      </div>
+    )
   if (run.state === 'cancelled')
     return (
       <div className="response-empty">
@@ -48,7 +56,9 @@ export function ResponsePane({ run }: { run: RunState | null }) {
             {run.request.method} {run.request.url}
           </p>
         )}
-        <p className="err-hint">Confira a URL, a rede e se o servidor está no ar. O Console (fase 7) vai mostrar os detalhes.</p>
+        <p className="err-hint">
+          {run.code === 'SCRIPT_ERROR' ? 'Corrija o script em Scripts → Pre-request (ou na collection/pasta).' : 'Confira a URL, a rede e se o servidor está no ar.'} Detalhes no Console (Ctrl+Alt+C).
+        </p>
       </div>
     )
   return <ResponseView res={run.response} />
@@ -82,7 +92,7 @@ function ResponseView({ res }: { res: HttpResponse }) {
               ['body', 'Body'],
               ['cookies', `Cookies${cookies.length ? ` (${cookies.length})` : ''}`],
               ['headers', `Headers (${res.headers.length})`],
-              ['tests', 'Test Results']
+              ['tests', testLabel(res.scripts)]
             ] as [ResTab, string][]
           ).map(([id, label]) => (
             <button key={id} className={`subtab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
@@ -183,7 +193,11 @@ function ResponseView({ res }: { res: HttpResponse }) {
         </div>
       )}
 
-      {tab === 'tests' && <div className="placeholder pad">Os testes (pm.test) entram na fase 6.</div>}
+      {tab === 'tests' && (
+        <div className="res-scroll">
+          <TestResults report={res.scripts} />
+        </div>
+      )}
     </div>
   )
 }
@@ -303,3 +317,9 @@ function parseSetCookies(headers: [string, string][]): Cookie[] {
 }
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+function testLabel(r: ScriptsReport | undefined): string {
+  const c = testCounts(r)
+  if (!r || (c.total === 0 && c.skipped === 0)) return r?.errors.length ? 'Test Results (erro)' : 'Test Results'
+  return `Test Results (${c.passed}/${c.total})`
+}
