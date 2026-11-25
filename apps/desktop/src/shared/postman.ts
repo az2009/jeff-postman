@@ -211,6 +211,11 @@ function normItems(items: unknown): ImportedNode[] {
 /** Lê um JSON do Postman e diz o que é. Lança erro com mensagem legível quando não reconhece. */
 export function parsePostman(json: unknown): ParsedImport {
   if (!isObj(json)) throw new Error('O arquivo não é um objeto JSON')
+  // a API do Postman (GET /collections/:id, /environments/:id) embrulha em { collection } ou { environment }
+  if (!json.info && !json.values && Object.keys(json).length === 1) {
+    if (isObj(json.collection)) return parsePostman(json.collection)
+    if (isObj(json.environment)) return parsePostman(json.environment)
+  }
   // collection
   if (isObj(json.info) && Array.isArray(json.item)) {
     const info = json.info

@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import type { KeyValue, RequestDoc, RunConfig, RunnerEvent, RunRequestResult, RunSummary, TreeItem } from '@shared/types'
 import type { Repo } from './db'
-import { executeRequest, type RunContext } from './execute'
+import { clean, executeRequest, type RunContext } from './execute'
 import { cancel } from './http'
 
 const active = new Map<string, { stop: boolean; requestId: string | null }>()
@@ -172,9 +172,9 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
       }
       summary.status = flag.stop ? 'stopped' : 'finished'
       if (cfg.keepVariableValues) {
-        repo.setGlobals(ctx.globals)
-        repo.setCollectionVariables(cfg.collectionId, ctx.collectionVariables)
-        if (cfg.environmentId && ctx.environment) repo.updateEnvironment(cfg.environmentId, { values: ctx.environment })
+        repo.setGlobals(clean(ctx.globals))
+        repo.setCollectionVariables(cfg.collectionId, clean(ctx.collectionVariables))
+        if (cfg.environmentId && ctx.environment && repo.getEnvironment(cfg.environmentId)) repo.updateEnvironment(cfg.environmentId, { values: clean(ctx.environment) })
       }
     } catch (e) {
       summary.status = 'error'

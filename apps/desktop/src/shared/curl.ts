@@ -8,7 +8,10 @@ export const looksLikeCurl = (text: string) => /^\s*curl(\.exe)?\s/i.test(text)
  * e continuação de linha com \ (bash), ^ (cmd) ou ` (PowerShell).
  */
 export function tokenize(cmd: string): string[] {
-  const s = cmd.replace(/\\\r?\n|\^\r?\n|`\r?\n/g, ' ')
+  let s = cmd.replace(/\\\r?\n|\^\r?\n|`\r?\n/g, ' ')
+  // "Copy as cURL (cmd)" do Chrome/Edge escapa tudo com ^ (^" ^& ^% ^\^"): no cmd o ^ só protege o
+  // caractere seguinte, então sai e sobra a linha que o curl recebe (com \" dentro das aspas)
+  if (/\^"/.test(s)) s = s.replace(/\^(.)/g, '$1')
   const out: string[] = []
   let cur = ''
   let has = false

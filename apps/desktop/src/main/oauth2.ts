@@ -5,7 +5,7 @@
 import { BrowserWindow, session } from 'electron'
 import { randomBytes } from 'node:crypto'
 import type { OAuth2Token } from '@shared/types'
-import { b64url, pkcePair, tokenRequest, toToken, type OAuth2Config } from './oauth2-core'
+import { b64url, isRedirectTarget, pkcePair, tokenRequest, toToken, type OAuth2Config, type TokenHttpOptions } from './oauth2-core'
 
 export { configFrom, refreshToken, type OAuth2Config } from './oauth2-core'
 
@@ -23,7 +23,6 @@ function captureRedirect(authorizeUrl: string, redirectUri: string, parent: Brow
       webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true }
     })
     let done = false
-    const target = redirectUri.split(/[?#]/)[0]
     const finish = (err: Error | null, url?: URL) => {
       if (done) return
       done = true
@@ -34,18 +33,18 @@ function captureRedirect(authorizeUrl: string, redirectUri: string, parent: Brow
     }
     // o redirect_uri normalmente não existe (ou é um site externo): intercepta antes de carregar
     session.fromPartition(partition).webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, cb) => {
-      if (details.url.startsWith(target)) {
+      if (isRedirectTarget(details.url, redirectUri)) {
         cb({ cancel: true })
         finish(null, new URL(details.url))
       } else cb({})
     })
     const check = (_e: unknown, url: string) => {
-      if (url.startsWith(target)) finish(null, new URL(url))
+      if (isRedirectTarget(url, redirectUri)) finish(null, new URL(url))
     }
     win.webContents.on('will-redirect', check)
     win.webContents.on('will-navigate', check)
     win.webContents.on('did-fail-load', (_e, code, desc, url) => {
-      if (url.startsWith(target)) finish(null, new URL(url))
+      if (isRedirectTarget(url, redirectUri)) finish(null, new URL(url))
       else if (code !== -3) finish(new Error(`Falha ao abrir a página de login: ${desc} (${code})`))
     })
     win.on('closed', () => finish(new Error('Janela de login fechada antes de concluir')))
@@ -53,12 +52,12 @@ function captureRedirect(authorizeUrl: string, redirectUri: string, parent: Brow
   })
 }
 
-export async function getNewToken(cfg: OAuth2Config, parent: BrowserWindow | null): Promise<OAuth2Token> {
+export async function getNewToken(cfg: OAuth2Config, parent: BrowserWindow | null, http: TokenHttpOptions = {}): Promise<OAuth2Token> {
   switch (cfg.grantType) {
     case 'client_credentials':
-      return toToken(cfg, await tokenRequest(cfg, { grant_type: 'client_credentials' }), cfg.grantType)
+      return toToken(cfg, await tokenRequest(cfg, { grant_type: 'client_credentials' }, http), cfg.grantType)
     case 'password_credentials':
-      return toToken(cfg, await tokenRequest(cfg, { grant_type: 'password', username: cfg.username, password: cfg.password }), cfg.grantType)
+      return toToken(cfg, await tokenRequest(cfg, { grant_type: 'password', username: cfg.username, password: cfg.password }, http), cfg.grantType)
     case 'authorization_code':
     case 'authorization_code_with_pkce':
     case 'implicit': {
@@ -91,7 +90,7 @@ export async function getNewToken(cfg: OAuth2Config, parent: BrowserWindow | nul
       if (!code) throw new Error('O redirect não trouxe o code')
       const form: Record<string, string> = { grant_type: 'authorization_code', code, redirect_uri: cfg.redirectUri }
       if (pkce) form.code_verifier = pkce.verifier
-      return toToken(cfg, await tokenRequest(cfg, form), cfg.grantType)
+      return toToken(cfg, await tokenRequest(cfg, form, http), cfg.grantType)
     }
     default:
       throw new Error(`Grant type não suportado: ${cfg.grantType}`)

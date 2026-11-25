@@ -644,12 +644,18 @@ export class Repo {
     return rows.map((r) => JSON.parse(r.json) as StoredCookie)
   }
 
-  /** Grava o jar inteiro (chamado só quando mudou). */
-  replaceCookies(list: StoredCookie[]): void {
+  /** Aplica só o que um envio mudou (cookie novo/alterado, ou null = apagar), sem tocar nos outros. */
+  applyCookieChanges(changes: Iterable<[string, StoredCookie | null]>): void {
     this.tx(() => {
-      this.db.exec('DELETE FROM cookies')
-      const st = this.db.prepare('INSERT OR REPLACE INTO cookies (domain, path, name, value, json) VALUES (?, ?, ?, ?, ?)')
-      for (const c of list) st.run(c.domain, c.path, c.name, c.value, JSON.stringify(c))
+      const del = this.db.prepare('DELETE FROM cookies WHERE domain = ? AND path = ? AND name = ?')
+      const put = this.db.prepare('INSERT OR REPLACE INTO cookies (domain, path, name, value, json) VALUES (?, ?, ?, ?, ?)')
+      for (const [key, c] of changes) {
+        if (c) put.run(c.domain, c.path, c.name, c.value, JSON.stringify(c))
+        else {
+          const [domain, path, name] = key.split('\t')
+          del.run(domain, path, name)
+        }
+      }
     })
   }
 

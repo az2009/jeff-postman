@@ -29,7 +29,8 @@ export function parseSetCookie(header: string, url: URL, now = Date.now()): Cook
   const host = url.hostname.toLowerCase()
   const c: Cookie = {
     name: pair.slice(0, eq).trim(),
-    value: pair.slice(eq + 1).trim().replace(/^"(.*)"$/, '$1'),
+    // as aspas fazem parte do valor (RFC 6265, 4.1.1) e voltam como vieram, igual aos navegadores
+    value: pair.slice(eq + 1).trim(),
     domain: host,
     path: defaultPath(url),
     expires: null,
@@ -94,9 +95,16 @@ export function pathMatches(cookiePath: string, reqPath: string): boolean {
 
 export const isExpired = (c: Cookie, now = Date.now()) => c.expires !== null && c.expires <= now
 
+export const cookieKey = (c: { domain: string; path: string; name: string }) => `${c.domain}\t${c.path}\t${c.name}`
+
 export class CookieJar {
   cookies: Cookie[]
   dirty = false
+  /**
+   * O que este jar mudou (chave → cookie novo, ou null = apagado). Gravar só as mudanças, e não o jar
+   * inteiro, evita que dois envios ao mesmo tempo apaguem os cookies um do outro.
+   */
+  changes = new Map<string, Cookie | null>()
   constructor(cookies: Cookie[] = []) {
     this.cookies = cookies
   }
@@ -109,17 +117,25 @@ export class CookieJar {
       const i = this.cookies.findIndex((x) => x.name === c.name && x.domain === c.domain && x.path === c.path)
       if (isExpired(c, now)) {
         if (i >= 0) this.cookies.splice(i, 1)
-      } else if (i >= 0) this.cookies[i] = { ...c, createdAt: this.cookies[i].createdAt }
-      else this.cookies.push(c)
+        this.changes.set(cookieKey(c), null)
+      } else {
+        const next = i >= 0 ? { ...c, createdAt: this.cookies[i].createdAt } : c
+        if (i >= 0) this.cookies[i] = next
+        else this.cookies.push(next)
+        this.changes.set(cookieKey(c), next)
+      }
       this.dirty = true
     }
   }
 
   /** Cookies que vão nesta URL, do caminho mais específico para o mais geral (ordem da RFC). */
   match(url: URL, now = Date.now()): Cookie[] {
-    const before = this.cookies.length
-    this.cookies = this.cookies.filter((c) => !isExpired(c, now))
-    if (this.cookies.length !== before) this.dirty = true
+    const expired = this.cookies.filter((c) => isExpired(c, now))
+    if (expired.length) {
+      this.cookies = this.cookies.filter((c) => !isExpired(c, now))
+      for (const c of expired) this.changes.set(cookieKey(c), null)
+      this.dirty = true
+    }
     const secure = url.protocol === 'https:'
     return this.cookies
       .filter((c) => domainMatches(c, url.hostname) && pathMatches(c.path, url.pathname || '/') && (!c.secure || secure))

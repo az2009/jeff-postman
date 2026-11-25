@@ -4,7 +4,9 @@ Plano completo: [PLANO.md](PLANO.md).
 
 ## Estado
 
-**Todas as 9 fases do plano concluídas em 25/11/2026.** Testes: 82 automáticos (`npm test`; 87 com os arquivos reais em `PM_FILES`) e 4 de ponta a ponta com o app aberto (`npm run test:e2e`).
+**Todas as 9 fases do plano concluídas em 25/11/2026.** Testes: 101 automáticos (`npm test`; 106 com os arquivos reais em `PM_FILES`) e 6 de ponta a ponta com o app aberto (`npm run test:e2e`).
+
+**Revisão de código em 25/11/2026:** 16 ajustes (3 de segurança, 7 bugs, 6 refinos), descritos em [REVISAO.md](REVISAO.md). Os principais: a janela não navega mais para fora da tela do app e o IPC só aceita a tela do app; limite também no corpo descompactado (zip bomb); o pedido de token OAuth 2.0 passa a respeitar proxy, SSL e timeout; o callback do OAuth 2.0 é comparado pelo endereço inteiro; fechar aba ou o app com alteração não salva pede confirmação; a aba não fica mais travada em "Sending..." quando o envio dá erro interno; importa o "Copy as cURL (cmd)" do Chrome.
 
 Fase 9, acabamento:
 - **Settings** (engrenagem ou Ctrl+,): timeout das requisições, verificação de certificado SSL, seguir redirects e limite, tamanho máximo da resposta, cookies automáticos, tempo limite dos scripts, tema. Guardadas **cifradas** (têm senhas).

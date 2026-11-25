@@ -8,6 +8,7 @@ import type { JeffPostmanBridge } from '../src/shared/types'
 
 // o page.evaluate roda na janela do app, onde o preload expõe window.jeffPostman
 declare const window: { jeffPostman: JeffPostmanBridge }
+declare const location: { href: string }
 
 let app: ElectronApplication
 let page: Page
@@ -29,7 +30,7 @@ test.beforeAll(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 
   dataDir = mkdtempSync(join(tmpdir(), 'jeff-postman-e2e-'))
-  app = await electron.launch({ args: ['.'], cwd: join(__dirname, '..'), env: { ...process.env, JEFF_POSTMAN_USER_DATA: dataDir } })
+  app = await electron.launch({ args: ['.'], cwd: join(__dirname, '..'), env: { ...process.env, JEFF_POSTMAN_USER_DATA: dataDir, JEFF_POSTMAN_E2E: '1' } })
   page = await app.firstWindow()
   await page.waitForSelector('.tabbar')
 })
@@ -118,4 +119,27 @@ test('Runner roda a collection importada com testes', async () => {
   await expect(page.locator('.run-card', { hasText: 'Executadas' })).toContainText('6')
   await expect(page.locator('.run-card', { hasText: 'Testes aprovados' })).toContainText('6')
   await expect(page.locator('.run-card', { hasText: 'Testes reprovados' })).toContainText('0')
+})
+
+test('fechar aba com alteração não salva pede confirmação', async () => {
+  await page.locator('.tab-add').click()
+  await urlInput().fill(`${base}/rascunho`)
+  const tabs = page.locator('.tabbar .tab')
+  const before = await tabs.count()
+  // "Cancelar" mantém a aba aberta
+  page.once('dialog', (d) => void d.dismiss())
+  await page.keyboard.press('Control+w')
+  await expect(tabs).toHaveCount(before)
+  // "OK" fecha
+  page.once('dialog', (d) => void d.accept())
+  await page.keyboard.press('Control+w')
+  await expect(tabs).toHaveCount(before - 1)
+})
+
+test('a janela não sai da tela do app (o preload não vai para outra página)', async () => {
+  const appUrl = page.url()
+  await page.evaluate((b) => (location.href = `${b}/fora`), base)
+  await page.waitForTimeout(500)
+  expect(page.url()).toBe(appUrl)
+  expect(await page.evaluate(() => typeof window.jeffPostman)).toBe('object')
 })

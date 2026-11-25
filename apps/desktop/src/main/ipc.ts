@@ -18,7 +18,10 @@ type Handlers = {
   [K in IpcChannel]: (...args: IpcContract[K]['args']) => IpcContract[K]['ret'] | Promise<IpcContract[K]['ret']>
 }
 
-export function registerIpc(repo: Repo, dbPath: string): void {
+/** Chaves do active_state que só o main lê e grava (o renderer usa settings:get/set). */
+const RESERVED_STATE = new Set(['settings_enc'])
+
+export function registerIpc(repo: Repo, dbPath: string, isAppUrl: (url: string) => boolean): void {
   const handlers: Handlers = {
     'app:info': () => ({ version: app.getVersion(), dbPath, electron: process.versions.electron }),
     'app:setTheme': (theme) => {
@@ -60,7 +63,7 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     'oauth2:getToken': async (auth, collectionId, environmentId) => {
       const a = resolveAuth(auth, lookupOf(repo, collectionId, environmentId))
       const cfg = configFrom((k, d = '') => getParam(a, k, d))
-      const token = await getNewToken(cfg, BrowserWindow.getFocusedWindow())
+      const token = await getNewToken(cfg, BrowserWindow.getFocusedWindow(), { settings: repo.getSettings(), appVersion: app.getVersion() })
       return repo.saveToken(token)
     },
     'oauth2:listTokens': () => repo.listTokens(),
@@ -69,7 +72,7 @@ export function registerIpc(repo: Repo, dbPath: string): void {
       const t = repo.getToken(id)
       if (!t) throw new Error('Token não encontrado')
       const a = auth ? resolveAuth(auth, lookupOf(repo, collectionId, environmentId)) : undefined
-      return repo.saveToken(await refreshToken(t, configFrom((k, d = '') => getParam(a, k, d))))
+      return repo.saveToken(await refreshToken(t, configFrom((k, d = '') => getParam(a, k, d)), { settings: repo.getSettings(), appVersion: app.getVersion() }))
     },
     'import:text': (text, fileName) => importText(repo, text, fileName),
     'import:pickFiles': async () => {
@@ -95,8 +98,11 @@ export function registerIpc(repo: Repo, dbPath: string): void {
     },
     'export:globals': async () =>
       saveJson('workspace.postman_globals.json', exportEnvironment({ id: 'globals', name: 'Globals', values: repo.getGlobals() }, 'globals', app.getVersion())),
-    'state:get': (key) => repo.getState(key),
-    'state:set': (key, value) => repo.setState(key, value),
+    'state:get': (key) => (RESERVED_STATE.has(key) ? null : repo.getState(key)),
+    'state:set': (key, value) => {
+      if (RESERVED_STATE.has(key)) throw new Error(`Chave reservada: ${key}`)
+      repo.setState(key, value)
+    },
     'http:send': async (input) => {
       const result = await executeRequest(repo, input, app.getVersion())
       if (!(!result.ok && result.cancelled)) {
@@ -171,7 +177,12 @@ export function registerIpc(repo: Repo, dbPath: string): void {
 
   for (const channel of Object.keys(handlers) as IpcChannel[]) {
     const fn = handlers[channel] as (...a: unknown[]) => unknown
-    ipcMain.handle(channel, (_event, ...args: unknown[]) => fn(...args))
+    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+      // só a tela do app fala com o main (nunca uma página para onde a janela tenha ido)
+      const url = event.senderFrame?.url ?? ''
+      if (!isAppUrl(url)) throw new Error(`IPC recusado: origem não é a tela do app (${url || 'desconhecida'})`)
+      return fn(...args)
+    })
   }
 }
 

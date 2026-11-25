@@ -16,7 +16,8 @@ process.emitWarning = ((w: string | Error, ...rest: unknown[]) => {
   return (emit as (...a: unknown[]) => void)(w, ...rest)
 }) as typeof process.emitWarning
 
-const VERSION = '0.1.0'
+declare const __APP_VERSION__: string | undefined
+const VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0-dev'
 
 interface Args {
   cmd: string | null

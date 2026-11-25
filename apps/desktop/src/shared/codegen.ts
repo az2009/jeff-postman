@@ -22,6 +22,8 @@ const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 const js = (s: string) => JSON.stringify(s)
 const py = (s: string) => JSON.stringify(s)
 const ps = (s: string) => `'${s.replace(/'/g, "''")}'`
+/** valor entre aspas duplas no --form do curl: \ e " precisam de barra antes */
+const dq = (s: string) => s.replace(/[\\"]/g, (c) => '\\' + c)
 const files = (src: string | string[] | undefined) => (Array.isArray(src) ? src : src ? [src] : [])
 
 export function generate(lang: Language, r: CodeInput): string {
@@ -49,8 +51,8 @@ function curl(r: CodeInput): string {
   if (b?.mode === 'formdata')
     for (const e of b.formdata ?? []) {
       if (e.disabled || !e.key) continue
-      if (e.type === 'file') for (const f of files(e.src)) lines.push(`--form ${sq(`${e.key}=@"${f}"`)}`)
-      else lines.push(`--form ${sq(`${e.key}="${e.value ?? ''}"`)}`)
+      if (e.type === 'file') for (const f of files(e.src)) lines.push(`--form ${sq(`${e.key}=@"${dq(f)}"`)}`)
+      else lines.push(`--form ${sq(`${e.key}="${dq(e.value ?? '')}"`)}`)
     }
   if (b?.mode === 'file' && b.file?.src) lines.push(`--data-binary ${sq('@' + b.file.src)}`)
   return lines.join(' \\\n')

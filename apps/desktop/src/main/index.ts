@@ -1,8 +1,22 @@
-import { app, BrowserWindow, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, safeStorage, shell } from 'electron'
 import { dirname, join } from 'path'
 import { copyFileSync, existsSync, mkdirSync } from 'fs'
+import { pathToFileURL } from 'url'
 import { Repo } from './db'
 import { registerIpc } from './ipc'
+
+/** Endereço da tela do app (o servidor do Vite em desenvolvimento, o index.html empacotado no build). */
+function isAppUrl(url: string): boolean {
+  try {
+    const u = new URL(url)
+    const dev = process.env['ELECTRON_RENDERER_URL']
+    if (dev) return u.origin === new URL(dev).origin
+    const page = pathToFileURL(join(__dirname, '../renderer/index.html')).pathname
+    return u.protocol === 'file:' && decodeURIComponent(u.pathname).toLowerCase() === decodeURIComponent(page).toLowerCase()
+  } catch {
+    return false
+  }
+}
 
 let repo: Repo | null = null
 
@@ -35,6 +49,27 @@ function createWindow(): void {
     if (/^https?:\/\//.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
+  // A janela nunca sai da tela do app: soltar um arquivo fora da área de import, um link ou um
+  // redirect levariam a outra página, que receberia o preload (e com ele o IPC inteiro).
+  win.webContents.on('will-navigate', (e, url) => {
+    if (!isAppUrl(url)) e.preventDefault()
+  })
+  win.webContents.on('will-attach-webview', (e) => e.preventDefault())
+  // Alterações não salvas: a tela pede para segurar o fechamento; aqui o usuário decide
+  win.webContents.on('will-prevent-unload', (e) => {
+    // nos testes de ponta a ponta não há quem responda a caixa: fecha direto
+    if (process.env.JEFF_POSTMAN_E2E) return e.preventDefault()
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: ['Sair sem salvar', 'Cancelar'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'JEFF Postman',
+      message: 'Há abas com alterações não salvas.',
+      detail: 'Se sair agora, essas alterações se perdem.'
+    })
+    if (choice === 0) e.preventDefault()
+  })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -53,7 +88,7 @@ app.whenReady().then(() => {
       dec: (b) => safeStorage.decryptString(Buffer.from(b))
     }
   }
-  registerIpc(repo, dbPath)
+  registerIpc(repo, dbPath, isAppUrl)
   createWindow()
 
   app.on('activate', () => {

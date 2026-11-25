@@ -7,7 +7,7 @@ const NOW = Date.parse('2026-11-25T00:00:00Z')
 describe('parseSetCookie', () => {
   it('atributos, caminho padrão e Max-Age vencendo Expires', () => {
     const c = parseSetCookie('sid="abc"; Path=/api; Secure; HttpOnly; SameSite=Lax; Expires=Wed, 01 Jan 2030 00:00:00 GMT; Max-Age=60', u('https://x.com/api/v1/login'), NOW)!
-    expect(c).toMatchObject({ name: 'sid', value: 'abc', domain: 'x.com', path: '/api', secure: true, httpOnly: true, hostOnly: true, sameSite: 'Lax', expires: NOW + 60000 })
+    expect(c).toMatchObject({ name: 'sid', value: '"abc"', domain: 'x.com', path: '/api', secure: true, httpOnly: true, hostOnly: true, sameSite: 'Lax', expires: NOW + 60000 })
     expect(parseSetCookie('a=1', u('https://x.com/a/b/c'), NOW)!.path).toBe('/a/b')
   })
   it('Domain do próprio site ou de domínio pai é aceito; de outro site, recusado', () => {
@@ -37,5 +37,26 @@ describe('CookieJar', () => {
     j.store(u('https://x.com/'), ['a=; Max-Age=0'], NOW)
     expect(j.cookies).toHaveLength(0)
     expect(j.dirty).toBe(true)
+  })
+})
+
+describe('CookieJar.changes (gravar só o que mudou)', () => {
+  it('registra criação, troca e remoção por domínio/caminho/nome', () => {
+    const j = new CookieJar([{ name: 'velho', value: '1', domain: 'x.com', path: '/', expires: null, secure: false, httpOnly: false, hostOnly: true, createdAt: NOW }])
+    j.store(u('https://x.com/'), ['novo=2', 'velho=; Max-Age=0'], NOW)
+    expect([...j.changes.entries()].map(([k, c]) => [k, c?.value ?? null])).toEqual([
+      ['x.com\t/\tnovo', '2'],
+      ['x.com\t/\tvelho', null]
+    ])
+  })
+  it('cookie vencido descartado no envio também entra como remoção', () => {
+    const j = new CookieJar([{ name: 'v', value: '1', domain: 'x.com', path: '/', expires: NOW - 1, secure: false, httpOnly: false, hostOnly: true, createdAt: NOW - 10 }])
+    expect(j.header(u('https://x.com/'), NOW)).toBeNull()
+    expect(j.changes.get('x.com\t/\tv')).toBeNull()
+  })
+  it('valor entre aspas volta com as aspas (RFC 6265)', () => {
+    const j = new CookieJar()
+    j.store(u('https://x.com/'), ['sid="a b"'], NOW)
+    expect(j.header(u('https://x.com/'), NOW)).toBe('sid="a b"')
   })
 })

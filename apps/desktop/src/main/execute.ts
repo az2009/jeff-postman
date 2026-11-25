@@ -199,15 +199,30 @@ export async function executeRequest(repo: Repo, input: SendInput, appVersion: s
   auth = resolveAuth(auth, lookup)
   let refreshed = null
   if (auth?.type === 'oauth2') {
-    const r = await maybeRefresh(repo, auth)
-    auth = r.auth
-    refreshed = r.refreshed
+    try {
+      const r = await maybeRefresh(repo, auth, appVersion)
+      auth = r.auth
+      refreshed = r.refreshed
+    } catch (e) {
+      // falha na renovação vira erro desta requisição (antes subia como exceção: a aba ficava
+      // carregando e, no Runner, a execução inteira parava)
+      if (!ctx) persist(repo, input, state, changed, report)
+      return {
+        ok: false,
+        requestId: input.requestId,
+        cancelled: false,
+        code: 'OAUTH2_REFRESH',
+        error: `Não deu para renovar o token OAuth 2.0: ${(e as Error).message}. Peça um token novo em Authorization → Get New Access Token`,
+        request: null,
+        ...(pre.length || report.logs.length || report.tests.length ? { scripts: report } : {})
+      }
+    }
   }
 
   const settings = repo.getSettings()
   const jar = new CookieJar(repo.listCookies())
   const result = await send({ ...input, doc: resolveDoc(doc, lookup), auth }, appVersion, { settings, cookieJar: jar })
-  if (jar.dirty) repo.replaceCookies(jar.cookies)
+  if (jar.dirty) repo.applyCookieChanges(jar.changes)
   if (refreshed && result.ok) result.response.refreshedToken = refreshed
 
   // ---------- post-response ----------
@@ -251,20 +266,21 @@ function persist(repo: Repo, input: SendInput, state: ScriptState, changed: Reco
   }
 }
 
-const clean = (l: KeyValue[]) => l.map(({ key, value, type, disabled, description }) => ({ key, value, ...(type ? { type } : {}), ...(disabled ? { disabled } : {}), ...(description ? { description } : {}) }))
+/** Só os campos do formato do Postman (sem undefined nem marcas internas). */
+export const clean = (l: KeyValue[]) => l.map(({ key, value, type, disabled, description }) => ({ key, value, ...(type ? { type } : {}), ...(disabled ? { disabled } : {}), ...(description ? { description } : {}) }))
 
 /**
  * OAuth 2.0 no envio: se o auth aponta para um token guardado (jp_tokenId), usa o token atual dele e,
  * com "Auto-refresh" ligado, renova antes de vencer (30 s de folga) quando há refresh_token.
  */
-export async function maybeRefresh(repo: Repo, auth: PmAuth) {
+export async function maybeRefresh(repo: Repo, auth: PmAuth, appVersion = '0.0.0') {
   const id = getParam(auth, 'jp_tokenId')
   if (!id) return { auth, refreshed: null }
   let t = repo.getToken(id)
   if (!t) return { auth, refreshed: null }
   let refreshed = null
   if (getBool(auth, 'jp_autoRefresh', true) && t.refreshToken && t.expiresAt && t.expiresAt < Date.now() + 30_000) {
-    t = repo.saveToken(await refreshToken(t, configFrom((k, d = '') => getParam(auth, k, d))))
+    t = repo.saveToken(await refreshToken(t, configFrom((k, d = '') => getParam(auth, k, d)), { settings: repo.getSettings(), appVersion }))
     refreshed = t
   }
   const list = (auth.oauth2 as { key: string; value: unknown }[]).map((p) => (p.key === 'accessToken' ? { ...p, value: t!.accessToken } : p))

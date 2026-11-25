@@ -153,3 +153,13 @@ describe.skipIf(real.length === 0)('arquivos reais (ida e volta)', () => {
     })
   }
 })
+
+describe('formato da API do Postman', () => {
+  it('aceita { collection: ... } e { environment: ... }', () => {
+    const c = parsePostman({ collection: { info: { name: 'Da API', schema: SCHEMA_V21 }, item: [{ name: 'r', request: { method: 'GET', url: 'https://x' } }] } })
+    expect(c.kind).toBe('collection')
+    if (c.kind === 'collection') expect(c.data.items).toHaveLength(1)
+    const e = parsePostman({ environment: { name: 'Prod', values: [{ key: 'a', value: '1', enabled: true }] } })
+    expect(e).toMatchObject({ kind: 'environment', data: { name: 'Prod', values: [{ key: 'a', value: '1' }] } })
+  })
+})

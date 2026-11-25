@@ -169,7 +169,8 @@ function once(url: URL, method: string, headers: [string, string][], data: Buffe
         createConnection: ((_opts: unknown, cb: (err: Error | null, sock?: Socket) => void) => {
           const connectHeaders: Record<string, string> = { Host: `${hostname}:${port}` }
           if (proxy.authorization) connectHeaders['Proxy-Authorization'] = proxy.authorization
-          const creq = http.request({ host: proxy.host, port: proxy.port, method: 'CONNECT', path: `${hostname}:${port}`, headers: connectHeaders })
+          // o signal também derruba o CONNECT: Cancel e timeout não podem esperar o proxy responder
+          const creq = http.request({ host: proxy.host, port: proxy.port, method: 'CONNECT', path: `${hostname}:${port}`, headers: connectHeaders, signal })
           creq.on('connect', (res, socket) => {
             if (res.statusCode !== 200) {
               socket.destroy()
@@ -256,19 +257,29 @@ function once(url: URL, method: string, headers: [string, string][], data: Buffe
   })
 }
 
-function decode(body: Buffer, encoding: string | undefined): Buffer {
+/**
+ * Descompacta o corpo. O limite de tamanho vale também para o corpo descompactado: sem ele, uma
+ * resposta pequena (zip bomb) podia virar gigabytes na memória e derrubar o app.
+ */
+export function decode(body: Buffer, encoding: string | undefined, maxOutput = Infinity): Buffer {
   const enc = (encoding ?? '').toLowerCase().trim()
+  const opts = Number.isFinite(maxOutput) ? { maxOutputLength: Math.max(1, Math.floor(maxOutput)) } : {}
+  const tooBig = (e: unknown) => (e as NodeJS.ErrnoException)?.code === 'ERR_BUFFER_TOO_LARGE' || /Cannot create a Buffer larger than/i.test(String((e as Error)?.message))
+  const fail = () =>
+    Object.assign(new Error(`Resposta descompactada maior que ${Math.round(maxOutput / 1024 / 1024)} MB (ajuste em Settings)`), { code: 'ETOOBIG' })
   try {
-    if (enc === 'gzip' || enc === 'x-gzip') return zlib.gunzipSync(body, { finishFlush: zlib.constants.Z_SYNC_FLUSH })
-    if (enc === 'br') return zlib.brotliDecompressSync(body)
+    if (enc === 'gzip' || enc === 'x-gzip') return zlib.gunzipSync(body, { finishFlush: zlib.constants.Z_SYNC_FLUSH, ...opts })
+    if (enc === 'br') return zlib.brotliDecompressSync(body, opts)
     if (enc === 'deflate') {
       try {
-        return zlib.inflateSync(body)
-      } catch {
-        return zlib.inflateRawSync(body)
+        return zlib.inflateSync(body, opts)
+      } catch (e) {
+        if (tooBig(e)) throw e
+        return zlib.inflateRawSync(body, opts)
       }
     }
-  } catch {
+  } catch (e) {
+    if (tooBig(e)) throw fail()
     // corpo inválido para o encoding: devolve como veio
   }
   return body
@@ -424,7 +435,7 @@ export async function send(input: SendInput, appVersion: string, opts: SendOptio
     const statusLine = `HTTP/${raw.httpVersion} ${raw.status} ${raw.statusText}\r\n`
     const headersSize =
       statusLine.length + pairs(raw.rawHeaders).reduce((n, [k, v]) => n + k.length + v.length + 4, 0) + 2
-    const decoded = decode(raw.body, headerValue(raw.rawHeaders, 'content-encoding'))
+    const decoded = decode(raw.body, headerValue(raw.rawHeaders, 'content-encoding'), st.maxResponseMb * 1024 * 1024)
 
     const response: HttpResponse = {
       requestId,

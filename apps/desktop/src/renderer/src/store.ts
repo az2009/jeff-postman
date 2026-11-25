@@ -169,7 +169,8 @@ interface State {
 
   openItem(item: TreeItem): Promise<void>
   newTab(): void
-  closeTab(key: string): void
+  /** fecha a aba; com alteração não salva pede confirmação (force pula a pergunta) */
+  closeTab(key: string, force?: boolean): void
   activateTab(key: string): void
   updateActive(fn: (doc: RequestDoc) => RequestDoc): void
   setSubTab(t: RequestTab): void
@@ -613,7 +614,10 @@ export const useStore = create<State>((set, get) => ({
     const tab: OpenTab = { key: `t${++tabCounter}`, itemId: null, collectionId: null, doc: blankDoc(), dirty: false, subTab: 'params', run: null }
     set((s) => ({ tabs: [...s.tabs, tab], activeTabKey: tab.key }))
   },
-  closeTab(key) {
+  closeTab(key, force = false) {
+    const tab = get().tabs.find((t) => t.key === key)
+    // como no Postman: aba com alteração não salva pede confirmação antes de fechar
+    if (!force && tab?.dirty && !confirm(`"${tabTitle(tab)}" tem alterações não salvas. Fechar mesmo assim?`)) return
     set((s) => {
       const idx = s.tabs.findIndex((t) => t.key === key)
       const tabs = s.tabs.filter((t) => t.key !== key)
@@ -673,13 +677,19 @@ export const useStore = create<State>((set, get) => ({
         tabs: s.tabs.map((t) => (t.key === key && (!t.run || t.run.requestId === requestId || run.state === 'loading') ? { ...t, run } : t))
       }))
     setRun({ state: 'loading', requestId, startedAt: Date.now() })
-    const result = await api.invoke('http:send', {
-      requestId,
-      doc: tab.doc,
-      environmentId: get().activeEnvId,
-      collectionId: tab.collectionId,
-      itemId: tab.itemId
-    })
+    let result: SendResult
+    try {
+      result = await api.invoke('http:send', {
+        requestId,
+        doc: tab.doc,
+        environmentId: get().activeEnvId,
+        collectionId: tab.collectionId,
+        itemId: tab.itemId
+      })
+    } catch (e) {
+      // exceção no main (banco, IPC...): sem isto a aba ficava em "Sending..." para sempre
+      result = { ok: false, requestId, cancelled: false, code: 'INTERNAL', error: `Erro interno ao enviar: ${(e as Error).message ?? String(e)}`, request: null }
+    }
     if (result.ok) {
       setRun({ state: 'done', requestId, response: result.response })
       const t = result.response.refreshedToken
@@ -702,7 +712,7 @@ export const useStore = create<State>((set, get) => ({
     const report = result.ok ? result.response.scripts : result.scripts
     if (report) get().applyScriptUpdates(report)
     get().logRun(tab, result)
-    get().loadHistory()
+    get().loadHistory().catch(() => undefined)
   },
   cancelActive() {
     const run = get().tabs.find((t) => t.key === get().activeTabKey)?.run
@@ -853,6 +863,21 @@ export function lookupFor(s: Pick<State, 'globals' | 'collections' | 'environmen
   const env = s.activeEnvId ? s.environments.find((e) => e.id === s.activeEnvId) : undefined
   if (env) scopes.push({ name: 'environment', values: env.values })
   return makeLookup(scopes)
+}
+
+/** Nome que a aba mostra (requisição, environment, auth de collection/pasta ou Runner). */
+export function tabTitle(t: OpenTab): string {
+  return t.vars?.name ?? t.authOf?.name ?? t.runner?.name ?? t.doc.name
+}
+
+// fechar o app com aba não salva: o main pergunta (will-prevent-unload) se sai mesmo assim
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', (e) => {
+    if (useStore.getState().tabs.some((t) => t.dirty)) {
+      e.preventDefault()
+      e.returnValue = false
+    }
+  })
 }
 
 let consoleSeq = 0

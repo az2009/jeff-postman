@@ -45,3 +45,15 @@ describe('codegen', () => {
     expect(generate('fetch', ue)).toContain('urlencoded.append("a", "1 2");')
   })
 })
+
+describe('form-data no cURL', () => {
+  it('aspas e barra no valor vão escapadas dentro das aspas do --form', () => {
+    const fd = {
+      method: 'POST',
+      url: 'https://x.local',
+      headers: [] as [string, string][],
+      body: { mode: 'formdata' as const, formdata: [{ key: 'msg', type: 'text' as const, value: 'diz "oi" \\ tchau' }] }
+    }
+    expect(generate('curl', fd)).toContain(`--form 'msg="diz \\"oi\\" \\\\ tchau"'`)
+  })
+})

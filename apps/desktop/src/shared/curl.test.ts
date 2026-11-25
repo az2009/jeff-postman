@@ -69,3 +69,21 @@ describe('parseCurl', () => {
     expect(looksLikeCurl('https://a')).toBe(false)
   })
 })
+
+describe('Copy as cURL (cmd) do Chrome/Edge', () => {
+  it('desfaz o escape com ^ (aspas, &, JSON com \\^")', () => {
+    const cmd =
+      'curl ^"https://api.ex.com/v1/itens?a=1^&b=2^" ^\r\n' +
+      '  -H ^"accept: application/json^" ^\r\n' +
+      '  -H ^"content-type: application/json^" ^\r\n' +
+      '  --data-raw ^"^{^\\^"nome^\\^":^\\^"caf^é^\\^",^\\^"qtd^\\^":2^}^"'
+    const d = parseCurl(cmd)
+    expect(d.request.url.raw).toBe('https://api.ex.com/v1/itens?a=1&b=2')
+    expect(d.request.method).toBe('POST')
+    expect(d.request.header).toEqual([
+      { key: 'accept', value: 'application/json' },
+      { key: 'content-type', value: 'application/json' }
+    ])
+    expect(d.request.body).toMatchObject({ mode: 'raw', raw: '{"nome":"café","qtd":2}', options: { raw: { language: 'json' } } })
+  })
+})
