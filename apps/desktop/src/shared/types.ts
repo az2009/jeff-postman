@@ -279,8 +279,10 @@ export interface IpcContract {
   'window:attach': { args: [snapshots: TabSnapshot[]]; ret: boolean }
   /** manda uma aba para outra janela do app (target: id da janela; null = a principal), onde foi solta */
   'window:moveTo': { args: [snapshot: TabSnapshot, point: ScreenPoint | null, target: number | null]; ret: boolean }
-  /** onde o mouse está ao soltar uma aba arrastada: na própria janela, sobre outra janela do app ou fora */
-  'window:dragEnd': { args: []; ret: { over: 'self' | 'window' | 'outside'; target: number | null; x: number; y: number } }
+  /** começou a arrastar uma aba: o main mostra a etiqueta que segue o mouse e acende a janela de destino */
+  'window:dragStart': { args: [info: { title: string; canDetach: boolean }]; ret: void }
+  /** soltou a aba (point: onde, em coordenadas de tela): na própria janela, sobre outra janela do app ou fora */
+  'window:dragEnd': { args: [point: ScreenPoint | null]; ret: { over: 'self' | 'window' | 'outside'; target: number | null; x: number; y: number } }
   /** cada janela informa as requisições que tem abertas (e a destacada, o título da aba ativa) */
   'window:setTabInfo': { args: [info: { itemIds: string[]; title: string }]; ret: void }
   /** traz para a frente outra janela que já tem esta requisição aberta; false se nenhuma tem */
@@ -377,12 +379,13 @@ export const IPC_CHANNELS: IpcChannel[] = [
   'window:claimTab',
   'window:attach',
   'window:moveTo',
+  'window:dragStart',
   'window:dragEnd',
   'window:setTabInfo',
   'window:focusItem'
 ]
 
-export const EVENT_CHANNELS = ['runner:event', 'data:changed', 'window:attachTab', 'window:requestAttach'] as const
+export const EVENT_CHANNELS = ['runner:event', 'data:changed', 'window:attachTab', 'window:requestAttach', 'window:dropHint'] as const
 export type EventChannel = (typeof EVENT_CHANNELS)[number]
 
 export interface JeffPostmanBridge {

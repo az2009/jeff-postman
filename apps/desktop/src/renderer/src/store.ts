@@ -273,13 +273,16 @@ export const useStore = create<State>((set, get) => ({
         get().receiveTabs(m.snapshots ?? [], m.clientX, m.clientY)
       })
       api.on('window:requestAttach', () => void get().attachBack())
+      // uma aba arrastada de outra janela está sobre esta: a barra de abas acende
+      api.on('window:dropHint', (p) => document.body.classList.toggle('drop-hint', !!(p as { active?: boolean })?.active))
     }
     // janela destacada: pega a aba que veio para ela
     if (DETACHED) {
       const snap = await api.invoke('window:claimTab').catch(() => null)
       if (snap) get().receiveTabs([snap])
     }
-    if (get().tabs.length === 0) get().newTab()
+    // a aba inicial da principal é do usuário (não some quando uma aba volta de outra janela)
+    if (get().tabs.length === 0) (DETACHED ? openAutoBlank() : get().newTab())
   },
 
   setTheme(theme) {
@@ -695,7 +698,7 @@ export const useStore = create<State>((set, get) => ({
     }
     // a aba (com as alterações não salvas) agora está na outra janela
     get().closeTab(key, true)
-    if (!DETACHED && get().tabs.length === 0) get().newTab()
+    if (!DETACHED && get().tabs.length === 0) openAutoBlank()
   },
   receiveTabs(snaps, clientX, clientY) {
     const incoming: OpenTab[] = snaps.map((snap) => {
@@ -719,10 +722,9 @@ export const useStore = create<State>((set, get) => ({
     set((s) => {
       // a mesma requisição aberta e sem alteração aqui: fica só a que chegou
       const tabs = s.tabs.filter((t) => !(t.itemId && !t.dirty && incoming.some((x) => x.itemId === t.itemId)))
-      // a aba vazia que a janela abriu sozinha dá lugar às que chegaram
-      const t0 = tabs[0]
-      const blank = tabs.length === 1 && !t0.itemId && !t0.dirty && !t0.run && !t0.runner && !t0.vars && !t0.authOf && !t0.doc.request.url.raw
-      const list = blank ? [] : tabs
+      // só a aba vazia que o próprio app abriu (ao esvaziar a janela, ou ao abrir a destacada) dá lugar às que
+      // chegaram, e só se continuar intocada; abas do usuário nunca somem
+      const list = tabs.filter((t) => !(t.key === autoBlankKey && isUntouchedBlank(t)))
       const at = idx < 0 || idx > list.length ? list.length : idx
       list.splice(at, 0, ...incoming)
       const runs = { ...s.runs }
@@ -732,6 +734,7 @@ export const useStore = create<State>((set, get) => ({
       })
       return { tabs: list, activeTabKey: incoming[incoming.length - 1].key, runs }
     })
+    autoBlankKey = null
   },
   async attachBack() {
     const s = get()
@@ -763,7 +766,7 @@ export const useStore = create<State>((set, get) => ({
     }
     if (last) return void (await api.invoke('window:attach', []).catch(() => false))
     get().closeTab(key, true)
-    if (!DETACHED && get().tabs.length === 0) get().newTab()
+    if (!DETACHED && get().tabs.length === 0) openAutoBlank()
   },
   async onDataChanged(c) {
     if (c.scope === 'collections') {
@@ -1020,6 +1023,16 @@ export function lookupFor(s: Pick<State, 'globals' | 'collections' | 'environmen
   const env = s.activeEnvId ? s.environments.find((e) => e.id === s.activeEnvId) : undefined
   if (env) scopes.push({ name: 'environment', values: env.values })
   return makeLookup(scopes)
+}
+
+/** Aba vazia aberta pelo app (não pelo usuário): a primeira aba que chegar de outra janela toma o lugar dela. */
+let autoBlankKey: string | null = null
+function openAutoBlank(): void {
+  useStore.getState().newTab()
+  autoBlankKey = useStore.getState().activeTabKey
+}
+function isUntouchedBlank(t: OpenTab): boolean {
+  return !t.itemId && !t.dirty && !t.run && !t.runner && !t.vars && !t.authOf && !t.doc.request.url.raw
 }
 
 /** Aba pronta para ir a outra janela (com a execução, se for a aba do Runner). */

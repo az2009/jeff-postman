@@ -1383,3 +1383,7 @@ body.col-resizing iframe, body.col-resizing .code-editor { pointer-events: none;
 .detached-header .logo { flex: none; }
 .detached-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .attach-btn { white-space: nowrap; }
+
+/* arrasto de aba: cursor de mover em tudo e barra de destino acesa */
+body.tab-dragging, body.tab-dragging * { cursor: grabbing !important; user-select: none; }
+body.drop-hint .tabbar { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }

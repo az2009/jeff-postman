@@ -161,6 +161,99 @@ function appWindow(id: number): BrowserWindow | null {
   return d && !d.win.isDestroyed() ? d.win : null
 }
 
+/** Janela do app que está no ponto (a mais recente em foco quando se sobrepõem). */
+function windowAt(senderId: number, p: ScreenPoint): { over: 'self' | 'window' | 'outside'; target: number | null } {
+  for (const id of focusOrder) {
+    const w = appWindow(id)
+    if (!w || !w.isVisible() || w.isMinimized() || !contains(w.getBounds(), p)) continue
+    return id === senderId ? { over: 'self', target: null } : { over: 'window', target: id }
+  }
+  return { over: 'outside', target: null }
+}
+
+// ---------- arrasto de aba: etiqueta que segue o mouse fora da janela e destaque do destino ----------
+let dragTimer: ReturnType<typeof setInterval> | null = null
+let ghost: BrowserWindow | null = null
+let ghostLabel = ''
+let ghostSize = { width: 300, height: 32 }
+let hintTarget: number | null = null
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+
+function ghostHtml(label: string, ok: boolean): string {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"></head>
+<body style="margin:0;height:100vh;box-sizing:border-box;display:flex;align-items:center;padding:0 12px;background:#2b2b2b;color:#eee;border:1px solid ${ok ? '#ff6c37' : '#666'};overflow:hidden;font:12px 'Segoe UI',sans-serif;white-space:nowrap;text-overflow:ellipsis">${escapeHtml(label)}
+</body></html>`
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
+
+function setHint(target: number | null): void {
+  if (target === hintTarget) return
+  if (hintTarget !== null) appWindow(hintTarget)?.webContents.send('window:dropHint', { active: false })
+  if (target !== null) appWindow(target)?.webContents.send('window:dropHint', { active: true })
+  hintTarget = target
+}
+
+function dragStop(): void {
+  if (dragTimer) clearInterval(dragTimer)
+  dragTimer = null
+  setHint(null)
+  // a etiqueta é destruída (uma janela escondida impediria o app de fechar)
+  if (ghost && !ghost.isDestroyed()) ghost.destroy()
+  ghost = null
+  ghostLabel = ''
+}
+
+function dragStart(senderId: number, title: string, canDetach: boolean): void {
+  dragStop()
+  ghost = new BrowserWindow({
+    width: 300,
+    height: 32,
+    frame: false,
+    // janela sólida (a transparente não é desenhada de forma confiável no Windows com escala de tela)
+    backgroundColor: '#2b2b2b',
+    roundedCorners: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false }
+  })
+  ghost.setIgnoreMouseEvents(true)
+  // no Windows a opção alwaysOnTop do construtor não vale para janela que não recebe foco: a etiqueta
+  // ficava atrás das janelas do app. O nível 'screen-saver' a põe acima de tudo durante o arrasto.
+  ghost.setAlwaysOnTop(true, 'screen-saver')
+  ghost.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  ghost.webContents.on('will-navigate', (e) => e.preventDefault())
+  const started = Date.now()
+  dragTimer = setInterval(() => {
+    const g = ghost
+    if (!g || g.isDestroyed() || !appWindow(senderId) || Date.now() - started > 120_000) return dragStop()
+    const p = screen.getCursorScreenPoint()
+    const w = windowAt(senderId, p)
+    setHint(w.over === 'window' ? w.target : null)
+    // dentro da própria janela não há etiqueta (lá a aba só muda de lugar na barra)
+    const label = w.over === 'self' ? '' : w.over === 'window' ? `⤶  Anexar aqui: ${title}` : canDetach ? `⧉  Nova janela: ${title}` : 'Solte sobre uma janela do app'
+    if (!label) {
+      if (g.isVisible()) g.hide()
+      return
+    }
+    if (label !== ghostLabel) {
+      ghostLabel = label
+      ghostSize = { width: Math.min(420, 30 + label.length * 7), height: 32 }
+      void g.loadURL(ghostHtml(label, w.over === 'window' || canDetach)).catch(() => undefined)
+    }
+    // posição e tamanho juntos: só setPosition faz a janela crescer a cada passo no Windows com escala de tela
+    g.setBounds({ x: Math.round(p.x + 16), y: Math.round(p.y + 14), ...ghostSize })
+    if (!g.isVisible()) {
+      g.showInactive()
+      g.moveTop()
+    }
+  }, 16)
+}
+
 type WindowChannel = Extract<IpcChannel, `window:${string}`>
 type WindowHandlers = {
   [K in WindowChannel]: (event: IpcMainInvokeEvent, ...args: IpcContract[K]['args']) => IpcContract[K]['ret'] | Promise<IpcContract[K]['ret']>
@@ -198,16 +291,14 @@ export function registerWindowIpc(isAppUrl: (url: string) => boolean): void {
       if (!win || win.webContents.id === e.sender.id) return false
       return sendTo(win, [snapshot], point)
     },
-    'window:dragEnd': (e) => {
-      const p = screen.getCursorScreenPoint()
-      // a janela de cima naquele ponto (a mais recente em foco), entre as visíveis do app
-      for (const id of focusOrder) {
-        const w = appWindow(id)
-        if (!w || !w.isVisible() || w.isMinimized() || !contains(w.getBounds(), p)) continue
-        if (id === e.sender.id) return { over: 'self', target: null, ...p }
-        return { over: 'window', target: id, ...p }
-      }
-      return { over: 'outside', target: null, ...p }
+    'window:dragStart': (e, info) => {
+      dragStart(e.sender.id, String(info?.title ?? '').slice(0, 60), info?.canDetach !== false)
+    },
+    'window:dragEnd': (e, point) => {
+      dragStop()
+      const valid = point && Number.isFinite(point.x) && Number.isFinite(point.y)
+      const p = valid ? { x: Math.round(point.x), y: Math.round(point.y) } : screen.getCursorScreenPoint()
+      return { ...windowAt(e.sender.id, p), ...p }
     },
     'window:setTabInfo': (e, info) => {
       openItems.set(e.sender.id, Array.isArray(info.itemIds) ? info.itemIds.filter((x) => typeof x === 'string') : [])

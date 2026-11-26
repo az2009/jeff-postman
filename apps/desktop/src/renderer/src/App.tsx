@@ -160,9 +160,6 @@ function TabIcon({ t }: { t: OpenTab }) {
   return <span className={`tab-method ${methodClass(t.doc.request.method)}`}>{t.doc.request.method}</span>
 }
 
-/** Tipo do arrasto de aba (próprio, para nenhum campo de texto aceitar). */
-const TAB_DRAG_TYPE = 'application/x-jeff-postman-tab'
-
 /** Cada janela informa ao main as requisições que tem abertas (para não abrir a mesma em duas janelas). */
 function useReportOpenItems() {
   const ids = useStore((s) => s.tabs.map((t) => t.itemId).filter((x): x is string => !!x).join('|'))
@@ -189,6 +186,87 @@ function TabBar() {
   const detachTab = useStore((s) => s.detachTab)
   const moveTabTo = useStore((s) => s.moveTabTo)
   const [dragKey, setDragKey] = useState<string | null>(null)
+  const suppressClick = useRef(false)
+
+  /**
+   * Arrasto da aba com o mouse capturado (não o arrasto nativo do navegador, que mostra o "proibido" fora da
+   * janela): o cursor fica de "mover" o tempo todo, dentro da barra a aba muda de lugar e, fora da janela, o main
+   * mostra uma etiqueta ("Nova janela" ou "Anexar aqui") e acende a barra da janela de destino.
+   */
+  const startDrag = (e: React.PointerEvent<HTMLDivElement>, key: string) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('.tab-close')) return
+    const bar = ref.current
+    if (!bar) return
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const pid = e.pointerId
+    let on = false
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pid) return
+      if (!on) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return
+        on = true
+        // captura na barra (estável; a aba muda de lugar no DOM ao reordenar): o movimento chega mesmo fora da janela
+        try {
+          bar.setPointerCapture(pid)
+        } catch {
+          /* sem captura: o arrasto ainda funciona dentro da janela */
+        }
+        document.body.classList.add('tab-dragging')
+        setDragKey(key)
+        const st = useStore.getState()
+        const tab = st.tabs.find((x) => x.key === key)
+        window.jeffPostman
+          .invoke('window:dragStart', { title: tab ? tabTitleOf(tab) : '', canDetach: !DETACHED || st.tabs.length > 1 })
+          .catch(() => undefined)
+      }
+      // dentro da barra: reordena só depois de passar do meio da aba vizinha
+      const r = bar.getBoundingClientRect()
+      if (ev.clientY < r.top - 12 || ev.clientY > r.bottom + 12) return
+      const list = useStore.getState().tabs
+      const from = list.findIndex((x) => x.key === key)
+      const els = [...bar.querySelectorAll<HTMLElement>('.tab')]
+      els.forEach((el, i) => {
+        if (i === from) return
+        const b = el.getBoundingClientRect()
+        if (ev.clientX < b.left || ev.clientX > b.right) return
+        const past = from < i ? ev.clientX > b.left + b.width / 2 : ev.clientX < b.left + b.width / 2
+        if (past) moveTab(key, i)
+      })
+    }
+    const finish = async (ev: PointerEvent | null, cancel: boolean) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', onCancel)
+      window.removeEventListener('keydown', onKey)
+      if (!on) return
+      try {
+        bar.releasePointerCapture(pid)
+      } catch {
+        /* já solta */
+      }
+      document.body.classList.remove('tab-dragging')
+      setDragKey(null)
+      // o clique que vem logo depois do soltar não ativa a aba
+      suppressClick.current = true
+      setTimeout(() => (suppressClick.current = false), 0)
+      const inside = !!ev && ev.clientX >= 0 && ev.clientY >= 0 && ev.clientX < window.innerWidth && ev.clientY < window.innerHeight
+      // o ponto de soltar vem do cursor, lido pelo main (exato com monitores de escalas diferentes)
+      const where = await window.jeffPostman.invoke('window:dragEnd', null).catch(() => null)
+      // soltou dentro da própria janela (ou cancelou): a aba fica onde está na barra
+      if (cancel || inside || !where || where.over === 'self') return
+      const p = { x: where.x, y: where.y }
+      if (where.over === 'window') void moveTabTo(key, p, where.target)
+      else void detachTab(key, p)
+    }
+    const up = (ev: PointerEvent) => ev.pointerId === pid && void finish(ev, false)
+    const onCancel = (ev: PointerEvent) => ev.pointerId === pid && void finish(null, true)
+    const onKey = (ev: KeyboardEvent) => ev.key === 'Escape' && void finish(null, true)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', onCancel)
+    window.addEventListener('keydown', onKey)
+  }
   const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   useReportOpenItems()
 
@@ -236,39 +314,8 @@ function TabBar() {
             key={t.key}
             className={`tab ${t.key === active ? 'active' : ''} ${dragKey === t.key ? 'dragging' : ''}`}
             title={tabTitleOf(t)}
-            draggable
-            onDragStart={(e) => {
-              // tipo próprio: campos de texto e editores não aceitam (soltar a aba neles não cola o nome)
-              e.dataTransfer.setData(TAB_DRAG_TYPE, t.key)
-              e.dataTransfer.effectAllowed = 'move'
-              setDragKey(t.key)
-            }}
-            onDragOver={(e) => {
-              if (!dragKey || dragKey === t.key) return
-              e.preventDefault()
-              e.dataTransfer.dropEffect = 'move'
-              // reordena só depois de passar do meio da aba (sem "pular" entre abas de larguras diferentes)
-              const from = tabs.findIndex((x) => x.key === dragKey)
-              const to = tabs.findIndex((x) => x.key === t.key)
-              const r = e.currentTarget.getBoundingClientRect()
-              const past = from < to ? e.clientX > r.left + r.width / 2 : e.clientX < r.left + r.width / 2
-              if (past) moveTab(dragKey, to)
-            }}
-            onDrop={(e) => e.preventDefault()}
-            onDragEnter={(e) => dragKey && e.preventDefault()}
-            onDragEnd={async (e) => {
-              const key = dragKey
-              setDragKey(null)
-              // solta aceita dentro do app (reordenar) não destaca
-              if (!key || e.dataTransfer.dropEffect !== 'none') return
-              // soltou sobre outra janela do app: a aba vai para ela; fora de todas: vira uma janela própria ali
-              const where = await window.jeffPostman.invoke('window:dragEnd').catch(() => null)
-              if (!where || where.over === 'self') return
-              const point = { x: where.x, y: where.y }
-              if (where.over === 'window') void moveTabTo(key, point, where.target)
-              else void detachTab(key, point)
-            }}
-            onClick={() => activate(t.key)}
+            onPointerDown={(e) => startDrag(e, t.key)}
+            onClick={() => !suppressClick.current && activate(t.key)}
             onContextMenu={(e) => {
               e.preventDefault()
               // o menu não sai da janela perto das bordas

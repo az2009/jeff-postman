@@ -1,3 +1,12 @@
+# Ajustes da 0.2.1 (26/11/2026, uso real)
+
+| # | Tipo | Achado | Ajuste |
+|---|---|---|---|
+| 1 | Bug | Ao anexar, a aba que voltava apagava a aba vazia que o usuário já tinha na principal (a regra de "a aba vazia dá lugar" valia para qualquer aba vazia). Com duas janelas e abas vazias, parecia que o Anexar só fechava a janela. | Só a aba vazia que o próprio app abriu ao esvaziar a janela pode ser substituída. Teste e2e do cenário. |
+| 2 | Refino | Arrastar a aba usava o arrasto nativo do navegador: fora da janela aparecia o círculo de proibido e não havia sinal de onde ela iria. | Arrasto próprio com o mouse capturado: cursor de mover o tempo todo, etiqueta "Nova janela: …" / "Anexar aqui: …" seguindo o mouse e a barra de abas da janela de destino acesa. Esc cancela. Teste e2e da reordenação com o mouse. |
+| 3 | Bug | A etiqueta do arrasto crescia a cada movimento (setPosition no Windows com escala de tela). | Posição e tamanho juntos (setBounds). Conferido no app real. |
+| 4 | Bug | A etiqueta ficava atrás das janelas: no Windows o alwaysOnTop do construtor não vale para janela que não recebe foco. | setAlwaysOnTop(true, 'screen-saver') e moveTop ao mostrar. Conferido (isAlwaysOnTop) e o conteúdo capturado. |
+
 # Revisão de código (26/11/2026, versão 0.2.0)
 
 Revisão das entregas de 25 e 26/11: Runner com detalhe e Pause, barra lateral ajustável, PDF e imagem, Console na resposta e no Runner, barra de abas com scroll e abas em janela separada.

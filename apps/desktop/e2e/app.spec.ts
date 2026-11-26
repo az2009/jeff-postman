@@ -361,6 +361,56 @@ test('janela destacada: várias abas, mover uma de volta e anexar o resto', asyn
   for (let i = 0; i < 2; i++) await page.locator('.tab.active .tab-close').click()
 })
 
+test('anexar devolve a aba sem apagar as abas que já estavam na principal', async () => {
+  // a principal fica com uma aba vazia do usuário + uma requisição; destaca a requisição e anexa de volta
+  // limpa as abas dos testes anteriores (aceitando "fechar sem salvar")
+  const accept = (d: { accept(): Promise<void> }) => void d.accept()
+  page.on('dialog', accept)
+  for (let i = 0; i < 60 && (await page.locator('.tab').count()) > 0; i++) await page.keyboard.press('Control+w')
+  page.off('dialog', accept)
+  await expect(page.locator('.tab')).toHaveCount(0)
+  await page.locator('.tab-add').click()
+  await page.locator('.tab-add').click()
+  await urlInput().fill(`${base}/vai-e-volta`)
+  const opened = app.waitForEvent('window')
+  await page.locator('.tab.active').click({ button: 'right' })
+  await page.locator('.tab-menu button', { hasText: 'Abrir em janela separada' }).click()
+  const win = await opened
+  await win.waitForSelector('.detached-header')
+  await expect(page.locator('.tab')).toHaveCount(1)
+  const closed = win.waitForEvent('close')
+  await win.locator('.attach-btn').click()
+  await closed
+  await expect(page.locator('.tab')).toHaveCount(2)
+  await expect(page.locator('.tab').first()).toContainText('Untitled Request')
+  await expect(page.locator('.tab.active')).toContainText('/vai-e-volta')
+})
+
+test('arrastar a aba com o mouse dentro da barra reordena, sem abrir janela', async () => {
+  await page.locator('.tab-add').click()
+  await urlInput().fill(`${base}/terceira`)
+  const names = async () => (await page.locator('.tab .tab-name').allTextContents()).map((x) => x.replace(/^.*\//, ''))
+  expect(await names()).toEqual(['Untitled Request', 'vai-e-volta', 'terceira'])
+  const first = (await page.locator('.tab').nth(0).boundingBox())!
+  const last = (await page.locator('.tab').nth(2).boundingBox())!
+  let windows = 0
+  const count = () => windows++
+  app.on('window', count)
+  await page.mouse.move(first.x + 30, first.y + first.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(first.x + 60, first.y + first.height / 2, { steps: 3 })
+  await page.mouse.move(last.x + last.width * 0.8, last.y + last.height / 2, { steps: 12 })
+  await expect(page.locator('body.tab-dragging')).toHaveCount(1)
+  await page.mouse.up()
+  await expect(page.locator('body.tab-dragging')).toHaveCount(0)
+  expect(await names()).toEqual(['vai-e-volta', 'terceira', 'Untitled Request'])
+  await page.waitForTimeout(300)
+  // só a etiqueta do arrasto pode ter aparecido; nenhuma janela destacada
+  expect((await app.windows()).filter((w) => w.url().endsWith('#detached'))).toHaveLength(0)
+  app.off('window', count)
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Control+w')
+})
+
 test('fechar aba com alteração não salva pede confirmação', async () => {
   await page.locator('.tab-add').click()
   await urlInput().fill(`${base}/rascunho`)
