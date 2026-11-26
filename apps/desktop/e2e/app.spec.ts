@@ -274,6 +274,72 @@ test('muitas abas: barra rola, setas e lista de abas abertas', async () => {
   for (let i = 0; i < 18; i++) await page.keyboard.press('Control+w')
 })
 
+test('aba destacada em janela própria: sincroniza, foca e volta com alteração', async () => {
+  // destaca a requisição "Dois" (da collection do Runner) com uma alteração não salva
+  await page.locator('.tree .row', { hasText: 'Dois' }).click()
+  const tab = page.locator('.tab.active')
+  await expect(tab).toContainText('Dois')
+  await urlInput().fill(`${base}/dois?alterada=1`)
+  await expect(tab.locator('.dirty-dot')).toBeVisible()
+  const opened = app.waitForEvent('window')
+  await tab.click({ button: 'right' })
+  await page.locator('.tab-menu button', { hasText: 'Abrir em janela separada' }).click()
+  const win = await opened
+  await win.waitForSelector('.detached-header')
+  await expect(win.locator('.tab.active')).toContainText('Dois')
+  await expect(win.locator('.url-bar .var-input input')).toHaveValue(`${base}/dois?alterada=1`)
+  await expect(page.locator('.tab', { hasText: 'Dois' })).toHaveCount(0)
+  // envia na janela destacada; o console da resposta é dela
+  await win.locator('.send').click()
+  await expect(win.locator('.status')).toHaveText('200 OK')
+  await win.waitForTimeout(500)
+  await win.screenshot({ path: 'C:/Users/jeffe/AppData/Local/Temp/claude/5f781027a956e75a/41a26535-c175-459a-8c1c-24fe6457df28/scratchpad/detached.png' })
+  // clicar na requisição na principal traz a janela destacada, sem abrir cópia
+  await page.locator('.tree .row', { hasText: 'Dois' }).click()
+  await page.waitForTimeout(300)
+  await expect(page.locator('.tab', { hasText: 'Dois' })).toHaveCount(0)
+  // trocar o environment numa janela troca na outra
+  await win.locator('.env-selector select').selectOption({ label: 'E2E' })
+  await expect(page.locator('.env-selector select')).toHaveValue(await win.locator('.env-selector select').inputValue())
+  await win.locator('.env-selector select').selectOption({ label: 'No environment' })
+  // fechar a janela (X) devolve a aba para a principal, com a alteração e a resposta
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('#detached'))?.close()
+  })
+  await win.waitForEvent('close')
+  const back = page.locator('.tab.active')
+  await expect(back).toContainText('Dois')
+  await expect(back.locator('.dirty-dot')).toBeVisible()
+  await expect(urlInput()).toHaveValue(`${base}/dois?alterada=1`)
+  await expect(page.locator('.status')).toHaveText('200 OK')
+})
+
+test('janela destacada: várias abas, mover uma de volta e anexar o resto', async () => {
+  await page.locator('.tab-add').click()
+  await urlInput().fill(`${base}/primeira`)
+  const opened = app.waitForEvent('window')
+  await page.locator('.tab.active').click({ button: 'right' })
+  await page.locator('.tab-menu button', { hasText: 'Abrir em janela separada' }).click()
+  const win = await opened
+  await win.waitForSelector('.detached-header')
+  // abre outra aba na janela destacada
+  await win.locator('.tab-add').click()
+  await win.locator('.url-bar .var-input input').fill(`${base}/segunda`)
+  await expect(win.locator('.tab')).toHaveCount(2)
+  // "Mover para a janela principal" leva só aquela aba
+  await win.locator('.tab.active').click({ button: 'right' })
+  await win.locator('.tab-menu button', { hasText: 'Mover para a janela principal' }).click()
+  await expect(win.locator('.tab')).toHaveCount(1)
+  await expect(page.locator('.tab.active')).toContainText('/segunda')
+  // o botão Anexar devolve o resto e fecha a janela
+  const closed = win.waitForEvent('close')
+  await win.locator('.attach-btn').click()
+  await closed
+  await expect(page.locator('.tab.active')).toContainText('/primeira')
+  // limpa as abas criadas
+  for (let i = 0; i < 2; i++) await page.locator('.tab.active .tab-close').click()
+})
+
 test('fechar aba com alteração não salva pede confirmação', async () => {
   await page.locator('.tab-add').click()
   await urlInput().fill(`${base}/rascunho`)

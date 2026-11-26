@@ -17,6 +17,7 @@ import { RequestEditor } from './components/RequestEditor'
 import { ResponsePane } from './components/ResponsePane'
 import { SaveDialog } from './components/SaveDialog'
 import { ExportDialog, ImportDialog, Toast } from './components/ImportExport'
+import { DETACHED } from './windowMode'
 
 export function App() {
   const init = useStore((s) => s.init)
@@ -34,10 +35,10 @@ export function App() {
   useShortcuts()
 
   return (
-    <div className="app">
-      <Header />
+    <div className={`app ${DETACHED ? 'detached' : ''}`}>
+      {DETACHED ? <DetachedHeader /> : <Header />}
       <div className="body">
-        <Sidebar />
+        {!DETACHED && <Sidebar />}
         <main className="main">
           <TabBar />
           <Workbench />
@@ -168,6 +169,11 @@ function TabBar() {
   const ref = useRef<HTMLDivElement>(null)
   const [edge, setEdge] = useState({ left: false, right: false })
   const [list, setList] = useState(false)
+  const moveTab = useStore((s) => s.moveTab)
+  const detachTab = useStore((s) => s.detachTab)
+  const moveTabToMain = useStore((s) => s.moveTabToMain)
+  const [dragKey, setDragKey] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
 
   // setas aparecem só quando as abas não cabem; cada lado some ao chegar no fim
   const measure = () => {
@@ -211,9 +217,41 @@ function TabBar() {
         {tabs.map((t) => (
           <div
             key={t.key}
-            className={`tab ${t.key === active ? 'active' : ''}`}
-            title={tabTitleOf(t)}
+            className={`tab ${t.key === active ? 'active' : ''} ${dragKey === t.key ? 'dragging' : ''}`}
+            title={`${tabTitleOf(t)}\nArraste para fora da janela para destacar`}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', tabTitleOf(t))
+              e.dataTransfer.effectAllowed = 'move'
+              setDragKey(t.key)
+            }}
+            onDragOver={(e) => {
+              // reordena ao passar sobre outra aba
+              if (!dragKey || dragKey === t.key) return
+              e.preventDefault()
+              const to = tabs.findIndex((x) => x.key === t.key)
+              moveTab(dragKey, to)
+            }}
+            onDrop={(e) => e.preventDefault()}
+            onDragEnter={(e) => dragKey && e.preventDefault()}
+            onDragEnd={async (e) => {
+              const key = dragKey
+              setDragKey(null)
+              // solta aceita dentro do app (reordenar) não destaca
+              if (!key || e.dataTransfer.dropEffect !== 'none') return
+              // soltou fora da janela: a aba vira uma janela própria ali;
+              // numa janela destacada, soltar sobre a principal devolve a aba para lá
+              const where = await window.jeffPostman.invoke('window:dragEnd').catch(() => null)
+              if (!where || where.over === 'self') return
+              const point = { x: where.x, y: where.y }
+              if (DETACHED && where.over === 'main') void moveTabToMain(key, point)
+              else void detachTab(key, point)
+            }}
             onClick={() => activate(t.key)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setMenu({ key: t.key, x: e.clientX, y: e.clientY })
+            }}
             onMouseDown={(e) => e.button === 1 && (e.preventDefault(), close(t.key))}
           >
             <TabIcon t={t} />
@@ -262,7 +300,85 @@ function TabBar() {
         </div>
       )}
       <EnvSelector />
+      {menu && (
+        <>
+          <div className="menu-backdrop" onMouseDown={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} />
+          <div className="menu floating tab-menu" style={{ left: menu.x, top: menu.y }}>
+            {DETACHED && (
+              <button
+                onClick={() => {
+                  setMenu(null)
+                  void moveTabToMain(menu.key, null)
+                }}
+              >
+                Mover para a janela principal
+              </button>
+            )}
+            <button
+              disabled={DETACHED && tabs.length < 2}
+              onClick={() => {
+                setMenu(null)
+                void detachTab(menu.key, null)
+              }}
+            >
+              Abrir em janela separada
+            </button>
+            <button
+              onClick={() => {
+                setMenu(null)
+                close(menu.key)
+              }}
+            >
+              Fechar
+            </button>
+            <button
+              disabled={tabs.length < 2}
+              onClick={() => {
+                setMenu(null)
+                for (const t of tabs) if (t.key !== menu.key) close(t.key)
+              }}
+            >
+              Fechar as outras
+            </button>
+          </div>
+        </>
+      )}
     </div>
+  )
+}
+
+/** Cabeçalho da janela destacada: título da aba ativa, tema e o botão de devolver as abas. */
+function DetachedHeader() {
+  const tabs = useStore((s) => s.tabs)
+  const tab = useStore((s) => s.tabs.find((t) => t.key === s.activeTabKey))
+  const theme = useStore((s) => s.theme)
+  const setTheme = useStore((s) => s.setTheme)
+  const attachBack = useStore((s) => s.attachBack)
+  const title = tab ? tabTitleOf(tab) : 'JEFF Postman'
+  const itemIds = tabs.map((t) => t.itemId).filter((x): x is string => !!x).join('|')
+  // o main sabe quais requisições estão aqui (para não abrir cópia na principal) e põe o título na janela
+  useEffect(() => {
+    document.title = `${title} · JEFF Postman`
+    window.jeffPostman?.invoke('window:setTabInfo', { itemIds: itemIds ? itemIds.split('|') : [], title }).catch(() => undefined)
+  }, [itemIds, title])
+  return (
+    <header className="header detached-header">
+      <span className="logo">J</span>
+      <span className="detached-title" title={title}>
+        {title}
+      </span>
+      <div className="spacer" />
+      <button className="icon-btn no-drag" title={theme === 'dark' ? 'Tema claro' : 'Tema escuro'} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+        <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+      </button>
+      <button
+        className="btn small ghost no-drag attach-btn"
+        title="Devolver as abas para a janela principal e fechar esta (o mesmo que fechar a janela)"
+        onClick={() => void attachBack()}
+      >
+        Anexar à janela principal
+      </button>
+    </header>
   )
 }
 

@@ -14,9 +14,10 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { sanitizeName } from '@shared/binary'
 import type { ImportResult } from '@shared/types'
+import { broadcastChanges, changesOf } from './windows'
 
 type Handlers = {
-  [K in IpcChannel]: (...args: IpcContract[K]['args']) => IpcContract[K]['ret'] | Promise<IpcContract[K]['ret']>
+  [K in Exclude<IpcChannel, `window:${string}`>]: (...args: IpcContract[K]['args']) => IpcContract[K]['ret'] | Promise<IpcContract[K]['ret']>
 }
 
 /** Chaves do active_state que só o main lê e grava (o renderer usa settings:get/set). */
@@ -191,13 +192,16 @@ export function registerIpc(repo: Repo, dbPath: string, isAppUrl: (url: string) 
     }
   }
 
-  for (const channel of Object.keys(handlers) as IpcChannel[]) {
+  for (const channel of Object.keys(handlers) as Exclude<IpcChannel, `window:${string}`>[]) {
     const fn = handlers[channel] as (...a: unknown[]) => unknown
-    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+    ipcMain.handle(channel, async (event, ...args: unknown[]) => {
       // só a tela do app fala com o main (nunca uma página para onde a janela tenha ido)
       const url = event.senderFrame?.url ?? ''
       if (!isAppUrl(url)) throw new Error(`IPC recusado: origem não é a tela do app (${url || 'desconhecida'})`)
-      return fn(...args)
+      const result = await fn(...args)
+      // as outras janelas (abas destacadas) recarregam o que mudou no banco
+      broadcastChanges(event.sender, changesOf(channel, args))
+      return result
     })
   }
 }

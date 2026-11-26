@@ -1375,3 +1375,11 @@ body.col-resizing iframe, body.col-resizing .code-editor { pointer-events: none;
 .inline-console { display: flex; flex-direction: column; min-height: 120px; margin: 0 16px 16px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .inline-console-head { padding: 6px 12px; border-bottom: 1px solid var(--border); color: var(--text-2); font-weight: 600; font-size: 12px; }
 .rdp-console { margin: -8px; }
+
+/* ---------- abas destacadas ---------- */
+.tab.dragging { opacity: 0.5; }
+.tab-menu { min-width: 200px; }
+.detached-header { gap: 10px; }
+.detached-header .logo { flex: none; }
+.detached-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.attach-btn { white-space: nowrap; }

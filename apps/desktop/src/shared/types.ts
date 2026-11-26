@@ -270,7 +270,38 @@ export interface IpcContract {
   'cookies:delete': { args: [domain: string, path: string, name: string]; ret: void }
   'cookies:clear': { args: [domain: string | null]; ret: void }
   'search:requests': { args: [q: string]; ret: SearchHit[] }
+  // ---------- abas destacadas em janela própria ----------
+  /** abre uma janela nova com a aba (point: onde o mouse soltou a aba, em coordenadas de tela) */
+  'window:detach': { args: [snapshot: TabSnapshot, point: ScreenPoint | null]; ret: void }
+  /** a janela destacada pega a aba que veio para ela */
+  'window:claimTab': { args: []; ret: TabSnapshot | null }
+  /** janela destacada: devolve todas as abas para a principal e fecha; false se não há janela principal */
+  'window:attach': { args: [snapshots: TabSnapshot[]]; ret: boolean }
+  /** janela destacada: manda uma aba para a principal, na posição onde foi solta (a janela continua) */
+  'window:moveToMain': { args: [snapshot: TabSnapshot, point: ScreenPoint | null]; ret: boolean }
+  /** onde o mouse está ao soltar uma aba arrastada: na própria janela, sobre a principal ou fora */
+  'window:dragEnd': { args: []; ret: { over: 'self' | 'main' | 'outside'; x: number; y: number } }
+  /** a janela destacada informa as requisições que tem e o título da aba ativa */
+  'window:setTabInfo': { args: [info: { itemIds: string[]; title: string }]; ret: void }
+  /** traz para a frente a janela destacada que já tem esta requisição; false se nenhuma tem */
+  'window:focusItem': { args: [itemId: string]; ret: boolean }
 }
+
+export interface ScreenPoint {
+  x: number
+  y: number
+}
+
+/** Aba em trânsito entre janelas: o estado da aba (e o da execução, na aba do Runner). Opaco para o main. */
+export interface TabSnapshot {
+  tab: unknown
+  run?: unknown
+}
+
+/** Aviso às outras janelas de que algo mudou no banco e precisa ser recarregado. */
+export type DataChange =
+  | { scope: 'collections' | 'environments' | 'globals' | 'history' | 'scopes' | 'tokens' }
+  | { scope: 'state'; key: string; value: unknown }
 
 export type IpcChannel = keyof IpcContract
 
@@ -341,10 +372,17 @@ export const IPC_CHANNELS: IpcChannel[] = [
   'cookies:save',
   'cookies:delete',
   'cookies:clear',
-  'search:requests'
+  'search:requests',
+  'window:detach',
+  'window:claimTab',
+  'window:attach',
+  'window:moveToMain',
+  'window:dragEnd',
+  'window:setTabInfo',
+  'window:focusItem'
 ]
 
-export const EVENT_CHANNELS = ['runner:event'] as const
+export const EVENT_CHANNELS = ['runner:event', 'data:changed', 'window:attachTab', 'window:requestAttach'] as const
 export type EventChannel = (typeof EVENT_CHANNELS)[number]
 
 export interface JeffPostmanBridge {

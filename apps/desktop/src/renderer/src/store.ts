@@ -19,10 +19,14 @@ import type {
   KeyValue,
   RequestDoc,
   SentRequest,
-  TreeItem
+  TreeItem,
+  DataChange,
+  ScreenPoint,
+  TabSnapshot
 } from '@shared/types'
 import { api } from './api'
 import { setParam } from '@shared/auth'
+import { DETACHED } from './windowMode'
 import { makeLookup, type Lookup, type Scope } from '@shared/variables'
 
 export type SidebarView = 'collections' | 'environments' | 'history'
@@ -176,6 +180,18 @@ interface State {
   /** fecha a aba; com alteração não salva pede confirmação (force pula a pergunta) */
   closeTab(key: string, force?: boolean): void
   activateTab(key: string): void
+  /** move a aba para outra posição da barra */
+  moveTab(key: string, toIndex: number): void
+  /** abre a aba numa janela própria (point: onde a aba foi solta, em coordenadas de tela) */
+  detachTab(key: string, point: ScreenPoint | null): Promise<void>
+  /** recebe abas vindas de outra janela (clientX/Y: onde foram soltas nesta janela) */
+  receiveTabs(snaps: TabSnapshot[], clientX?: number, clientY?: number): void
+  /** janela destacada: devolve todas as abas para a principal e a janela fecha */
+  attachBack(): Promise<void>
+  /** janela destacada: manda uma aba para a principal, onde foi solta */
+  moveTabToMain(key: string, point: ScreenPoint | null): Promise<void>
+  /** outra janela mudou algo no banco: recarrega essa parte */
+  onDataChanged(c: DataChange): Promise<void>
   updateActive(fn: (doc: RequestDoc) => RequestDoc): void
   setSubTab(t: RequestTab): void
   saveActive(): Promise<void>
@@ -248,11 +264,22 @@ export const useStore = create<State>((set, get) => ({
       expanded: expanded && typeof expanded === 'object' ? (expanded as Record<string, boolean>) : {},
       globals
     })
-    if (get().tabs.length === 0) get().newTab()
     if (!runnerSubscribed) {
       runnerSubscribed = true
       api.on('runner:event', (ev) => get().onRunnerEvent(ev as RunnerEvent))
+      api.on('data:changed', (c) => void get().onDataChanged(c as DataChange))
+      api.on('window:attachTab', (p) => {
+        const m = p as { snapshots: TabSnapshot[]; clientX?: number; clientY?: number }
+        get().receiveTabs(m.snapshots ?? [], m.clientX, m.clientY)
+      })
+      api.on('window:requestAttach', () => void get().attachBack())
     }
+    // janela destacada: pega a aba que veio para ela
+    if (DETACHED) {
+      const snap = await api.invoke('window:claimTab').catch(() => null)
+      if (snap) get().receiveTabs([snap])
+    }
+    if (get().tabs.length === 0) get().newTab()
   },
 
   setTheme(theme) {
@@ -607,6 +634,8 @@ export const useStore = create<State>((set, get) => ({
     if (item.kind !== 'request') return
     const existing = get().tabs.find((t) => t.itemId === item.id)
     if (existing) return set({ activeTabKey: existing.key })
+    // já está numa janela destacada: traz aquela janela em vez de abrir uma cópia
+    if (!DETACHED && (await api.invoke('window:focusItem', item.id).catch(() => false))) return
     const doc = await api.invoke('items:get', item.id)
     if (!doc) return
     const tab: OpenTab = {
@@ -635,9 +664,124 @@ export const useStore = create<State>((set, get) => ({
       if (activeTabKey === key) activeTabKey = tabs[Math.min(idx, tabs.length - 1)]?.key ?? null
       return { tabs, activeTabKey }
     })
+    // janela destacada sem aba nenhuma: fecha
+    if (DETACHED && get().tabs.length === 0) void get().attachBack()
   },
   activateTab(activeTabKey) {
     set({ activeTabKey })
+  },
+  moveTab(key, toIndex) {
+    set((s) => {
+      const from = s.tabs.findIndex((t) => t.key === key)
+      if (from < 0) return {}
+      const tabs = [...s.tabs]
+      const [t] = tabs.splice(from, 1)
+      tabs.splice(Math.max(0, Math.min(toIndex, tabs.length)), 0, t)
+      return { tabs }
+    })
+  },
+  async detachTab(key, point) {
+    const s = get()
+    const tab = s.tabs.find((t) => t.key === key)
+    if (!tab) return
+    // a resposta de um envio em andamento chegaria nesta janela, não na nova
+    if (tab.run?.state === 'loading') return s.showToast('Espere o envio terminar para destacar a aba', 'bad')
+    // janela destacada com uma aba só: arrastar para fora não muda nada
+    if (DETACHED && s.tabs.length === 1) return
+    try {
+      await api.invoke('window:detach', snapshotOf(tab, s.runs), point)
+    } catch (e) {
+      return s.showToast(`Não foi possível destacar: ${(e as Error).message}`, 'bad')
+    }
+    // a aba (com as alterações não salvas) agora está na outra janela
+    get().closeTab(key, true)
+    if (!DETACHED && get().tabs.length === 0) get().newTab()
+  },
+  receiveTabs(snaps, clientX, clientY) {
+    const incoming: OpenTab[] = snaps.map((snap) => {
+      const tab: OpenTab = { ...(snap.tab as OpenTab), key: `t${++tabCounter}` }
+      if (tab.run?.state === 'loading') tab.run = null
+      return tab
+    })
+    if (!incoming.length) return
+    // posição: onde a aba foi solta na barra de abas; fora dela, no fim
+    let idx = -1
+    if (clientX !== undefined && clientY !== undefined && typeof document !== 'undefined') {
+      const bar = document.querySelector('.tabs')?.getBoundingClientRect()
+      if (bar && clientY >= bar.top - 24 && clientY <= bar.bottom + 24) {
+        const els = [...document.querySelectorAll('.tabs .tab')]
+        idx = els.findIndex((el) => {
+          const r = el.getBoundingClientRect()
+          return clientX < r.left + r.width / 2
+        })
+      }
+    }
+    set((s) => {
+      // a mesma requisição aberta e sem alteração aqui: fica só a que chegou
+      const tabs = s.tabs.filter((t) => !(t.itemId && !t.dirty && incoming.some((x) => x.itemId === t.itemId)))
+      // a aba vazia que a janela abriu sozinha dá lugar às que chegaram
+      const t0 = tabs[0]
+      const blank = tabs.length === 1 && !t0.itemId && !t0.dirty && !t0.run && !t0.runner && !t0.vars && !t0.authOf && !t0.doc.request.url.raw
+      const list = blank ? [] : tabs
+      const at = idx < 0 || idx > list.length ? list.length : idx
+      list.splice(at, 0, ...incoming)
+      const runs = { ...s.runs }
+      snaps.forEach((snap, i) => {
+        const runId = incoming[i].runner?.runId
+        if (runId && snap.run && !runs[runId]) runs[runId] = snap.run as State['runs'][string]
+      })
+      return { tabs: list, activeTabKey: incoming[incoming.length - 1].key, runs }
+    })
+  },
+  async attachBack() {
+    const s = get()
+    const loading = s.tabs.filter((t) => t.run?.state === 'loading')
+    await Promise.all(loading.map((t) => api.invoke('http:cancel', (t.run as { requestId: string }).requestId).catch(() => undefined)))
+    const snaps = s.tabs.map((t) => snapshotOf(t, s.runs))
+    // tira as abas daqui antes: a janela fecha logo depois e não pode perguntar por alteração não salva
+    const before = s.tabs
+    const active = s.activeTabKey
+    set({ tabs: [], activeTabKey: null })
+    const ok = await api.invoke('window:attach', snaps).catch(() => false)
+    if (!ok && before.length) {
+      set({ tabs: before, activeTabKey: active })
+      get().showToast('A janela principal não está aberta; as abas continuam aqui', 'bad')
+    }
+  },
+  async moveTabToMain(key, point) {
+    const s = get()
+    const tab = s.tabs.find((t) => t.key === key)
+    if (!tab) return
+    if (tab.run?.state === 'loading') return s.showToast('Espere o envio terminar para mover a aba', 'bad')
+    // a última aba volta com o anexar (que fecha a janela)
+    if (s.tabs.length === 1) {
+      set({ tabs: [], activeTabKey: null })
+      const ok = await api.invoke('window:moveToMain', snapshotOf(tab, s.runs), point).catch(() => false)
+      if (ok) return void (await api.invoke('window:attach', []).catch(() => false))
+      set({ tabs: [tab], activeTabKey: tab.key })
+      return
+    }
+    const ok = await api.invoke('window:moveToMain', snapshotOf(tab, s.runs), point).catch(() => false)
+    if (ok) get().closeTab(key, true)
+  },
+  async onDataChanged(c) {
+    if (c.scope === 'collections') {
+      const collections = await api.invoke('collections:list')
+      set((s) => {
+        const items = { ...s.items }
+        for (const id of Object.keys(items)) if (!collections.some((x) => x.id === id)) delete items[id]
+        return { collections, items, authVersion: s.authVersion + 1 }
+      })
+      await get().refreshCollections(collections.map((x) => x.id))
+    } else if (c.scope === 'environments') set({ environments: await api.invoke('environments:list') })
+    else if (c.scope === 'globals') set({ globals: await api.invoke('globals:get') })
+    else if (c.scope === 'history') await get().loadHistory()
+    else if (c.scope === 'scopes') await get().reloadScopes()
+    else if (c.scope === 'tokens') await get().loadTokens()
+    else if (c.scope === 'state') {
+      if (c.key === 'theme') set({ theme: c.value === 'light' ? 'light' : 'dark' })
+      else if (c.key === 'activeEnvId') set({ activeEnvId: typeof c.value === 'string' ? c.value : null })
+    }
   },
   updateActive(fn) {
     set((s) => ({
@@ -875,6 +1019,11 @@ export function lookupFor(s: Pick<State, 'globals' | 'collections' | 'environmen
   const env = s.activeEnvId ? s.environments.find((e) => e.id === s.activeEnvId) : undefined
   if (env) scopes.push({ name: 'environment', values: env.values })
   return makeLookup(scopes)
+}
+
+/** Aba pronta para ir a outra janela (com a execução, se for a aba do Runner). */
+function snapshotOf(tab: OpenTab, runs: State['runs']): TabSnapshot {
+  return { tab, run: tab.runner?.runId ? runs[tab.runner.runId] : undefined }
 }
 
 /** Nome que a aba mostra (requisição, environment, auth de collection/pasta ou Runner). */
