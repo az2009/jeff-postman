@@ -160,6 +160,22 @@ function TabIcon({ t }: { t: OpenTab }) {
   return <span className={`tab-method ${methodClass(t.doc.request.method)}`}>{t.doc.request.method}</span>
 }
 
+/** Tipo do arrasto de aba (próprio, para nenhum campo de texto aceitar). */
+const TAB_DRAG_TYPE = 'application/x-jeff-postman-tab'
+
+/** Cada janela informa ao main as requisições que tem abertas (para não abrir a mesma em duas janelas). */
+function useReportOpenItems() {
+  const ids = useStore((s) => s.tabs.map((t) => t.itemId).filter((x): x is string => !!x).join('|'))
+  const title = useStore((s) => {
+    const t = s.tabs.find((x) => x.key === s.activeTabKey)
+    return t ? tabTitleOf(t) : 'JEFF Postman'
+  })
+  useEffect(() => {
+    if (DETACHED) document.title = `${title} · JEFF Postman`
+    window.jeffPostman?.invoke('window:setTabInfo', { itemIds: ids ? ids.split('|') : [], title }).catch(() => undefined)
+  }, [ids, title])
+}
+
 function TabBar() {
   const tabs = useStore((s) => s.tabs)
   const active = useStore((s) => s.activeTabKey)
@@ -171,9 +187,10 @@ function TabBar() {
   const [list, setList] = useState(false)
   const moveTab = useStore((s) => s.moveTab)
   const detachTab = useStore((s) => s.detachTab)
-  const moveTabToMain = useStore((s) => s.moveTabToMain)
+  const moveTabTo = useStore((s) => s.moveTabTo)
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
+  useReportOpenItems()
 
   // setas aparecem só quando as abas não cabem; cada lado some ao chegar no fim
   const measure = () => {
@@ -218,19 +235,24 @@ function TabBar() {
           <div
             key={t.key}
             className={`tab ${t.key === active ? 'active' : ''} ${dragKey === t.key ? 'dragging' : ''}`}
-            title={`${tabTitleOf(t)}\nArraste para fora da janela para destacar`}
+            title={tabTitleOf(t)}
             draggable
             onDragStart={(e) => {
-              e.dataTransfer.setData('text/plain', tabTitleOf(t))
+              // tipo próprio: campos de texto e editores não aceitam (soltar a aba neles não cola o nome)
+              e.dataTransfer.setData(TAB_DRAG_TYPE, t.key)
               e.dataTransfer.effectAllowed = 'move'
               setDragKey(t.key)
             }}
             onDragOver={(e) => {
-              // reordena ao passar sobre outra aba
               if (!dragKey || dragKey === t.key) return
               e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              // reordena só depois de passar do meio da aba (sem "pular" entre abas de larguras diferentes)
+              const from = tabs.findIndex((x) => x.key === dragKey)
               const to = tabs.findIndex((x) => x.key === t.key)
-              moveTab(dragKey, to)
+              const r = e.currentTarget.getBoundingClientRect()
+              const past = from < to ? e.clientX > r.left + r.width / 2 : e.clientX < r.left + r.width / 2
+              if (past) moveTab(dragKey, to)
             }}
             onDrop={(e) => e.preventDefault()}
             onDragEnter={(e) => dragKey && e.preventDefault()}
@@ -239,18 +261,18 @@ function TabBar() {
               setDragKey(null)
               // solta aceita dentro do app (reordenar) não destaca
               if (!key || e.dataTransfer.dropEffect !== 'none') return
-              // soltou fora da janela: a aba vira uma janela própria ali;
-              // numa janela destacada, soltar sobre a principal devolve a aba para lá
+              // soltou sobre outra janela do app: a aba vai para ela; fora de todas: vira uma janela própria ali
               const where = await window.jeffPostman.invoke('window:dragEnd').catch(() => null)
               if (!where || where.over === 'self') return
               const point = { x: where.x, y: where.y }
-              if (DETACHED && where.over === 'main') void moveTabToMain(key, point)
+              if (where.over === 'window') void moveTabTo(key, point, where.target)
               else void detachTab(key, point)
             }}
             onClick={() => activate(t.key)}
             onContextMenu={(e) => {
               e.preventDefault()
-              setMenu({ key: t.key, x: e.clientX, y: e.clientY })
+              // o menu não sai da janela perto das bordas
+              setMenu({ key: t.key, x: Math.min(e.clientX, window.innerWidth - 230), y: Math.min(e.clientY, window.innerHeight - 140) })
             }}
             onMouseDown={(e) => e.button === 1 && (e.preventDefault(), close(t.key))}
           >
@@ -308,7 +330,7 @@ function TabBar() {
               <button
                 onClick={() => {
                   setMenu(null)
-                  void moveTabToMain(menu.key, null)
+                  void moveTabTo(menu.key, null, null)
                 }}
               >
                 Mover para a janela principal
@@ -349,18 +371,11 @@ function TabBar() {
 
 /** Cabeçalho da janela destacada: título da aba ativa, tema e o botão de devolver as abas. */
 function DetachedHeader() {
-  const tabs = useStore((s) => s.tabs)
   const tab = useStore((s) => s.tabs.find((t) => t.key === s.activeTabKey))
   const theme = useStore((s) => s.theme)
   const setTheme = useStore((s) => s.setTheme)
   const attachBack = useStore((s) => s.attachBack)
   const title = tab ? tabTitleOf(tab) : 'JEFF Postman'
-  const itemIds = tabs.map((t) => t.itemId).filter((x): x is string => !!x).join('|')
-  // o main sabe quais requisições estão aqui (para não abrir cópia na principal) e põe o título na janela
-  useEffect(() => {
-    document.title = `${title} · JEFF Postman`
-    window.jeffPostman?.invoke('window:setTabInfo', { itemIds: itemIds ? itemIds.split('|') : [], title }).catch(() => undefined)
-  }, [itemIds, title])
   return (
     <header className="header detached-header">
       <span className="logo">J</span>

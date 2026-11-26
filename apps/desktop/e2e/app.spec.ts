@@ -173,6 +173,10 @@ test('Runner roda a collection importada com testes', async () => {
   await expect(side.locator('.console-line.lv-log')).toContainText('antes-dois')
   await expect(side.locator('.console-line.lv-warn')).toContainText('depois-dois 0')
   await expect(side.locator('.console-line.req')).toContainText('/dois')
+  // trocar de linha mantém a aba Console aberta
+  await page.locator('.run-row', { hasText: 'Um' }).nth(1).click()
+  await expect(side.locator('.rdp-tab.active')).toContainText('Console')
+  await expect(side.locator('.console-line.req')).toContainText('/um')
   await side.locator('.icon-btn[title="Fechar"]').click()
   await expect(side).toHaveCount(0)
 
@@ -183,6 +187,13 @@ test('Runner roda a collection importada com testes', async () => {
   await page.locator('.res-tabs .subtab', { hasText: 'Console (2)' }).click()
   await expect(page.locator('.res-console .console-line.lv-log')).toHaveText(/antes-dois/)
   await expect(page.locator('.res-console .console-line.lv-warn')).toHaveText(/depois-dois 0/)
+
+  // Raw escolhido continua Raw no envio seguinte
+  await page.locator('.res-tabs .subtab', { hasText: 'Body' }).click()
+  await page.locator('.res-toolbar .seg', { hasText: 'Raw' }).click()
+  await page.locator('.send').click()
+  await expect(page.locator('.status')).toHaveText('200 OK')
+  await expect(page.locator('.res-toolbar .seg.active')).toHaveText('Raw')
 })
 
 test('envio com erro mostra o console do envio abaixo do erro', async () => {
@@ -331,6 +342,16 @@ test('janela destacada: várias abas, mover uma de volta e anexar o resto', asyn
   await win.locator('.tab-menu button', { hasText: 'Mover para a janela principal' }).click()
   await expect(win.locator('.tab')).toHaveCount(1)
   await expect(page.locator('.tab.active')).toContainText('/segunda')
+  // buscar (Ctrl+K) na destacada uma requisição aberta na principal traz a principal, sem cópia
+  await page.locator('.tree .row', { hasText: 'Um' }).click()
+  await expect(page.locator('.tab.active')).toContainText('Um')
+  await win.locator('.tab.active').click()
+  await win.keyboard.press('Control+k')
+  await win.locator('.palette-input input').fill('Um')
+  await win.locator('.palette-row', { hasText: 'Um' }).first().click()
+  await win.waitForTimeout(300)
+  await expect(win.locator('.tab')).toHaveCount(1)
+  await expect(win.locator('.tab', { hasText: 'Um' })).toHaveCount(0)
   // o botão Anexar devolve o resto e fecha a janela
   const closed = win.waitForEvent('close')
   await win.locator('.attach-btn').click()

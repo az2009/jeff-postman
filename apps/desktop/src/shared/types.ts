@@ -277,13 +277,13 @@ export interface IpcContract {
   'window:claimTab': { args: []; ret: TabSnapshot | null }
   /** janela destacada: devolve todas as abas para a principal e fecha; false se não há janela principal */
   'window:attach': { args: [snapshots: TabSnapshot[]]; ret: boolean }
-  /** janela destacada: manda uma aba para a principal, na posição onde foi solta (a janela continua) */
-  'window:moveToMain': { args: [snapshot: TabSnapshot, point: ScreenPoint | null]; ret: boolean }
-  /** onde o mouse está ao soltar uma aba arrastada: na própria janela, sobre a principal ou fora */
-  'window:dragEnd': { args: []; ret: { over: 'self' | 'main' | 'outside'; x: number; y: number } }
-  /** a janela destacada informa as requisições que tem e o título da aba ativa */
+  /** manda uma aba para outra janela do app (target: id da janela; null = a principal), onde foi solta */
+  'window:moveTo': { args: [snapshot: TabSnapshot, point: ScreenPoint | null, target: number | null]; ret: boolean }
+  /** onde o mouse está ao soltar uma aba arrastada: na própria janela, sobre outra janela do app ou fora */
+  'window:dragEnd': { args: []; ret: { over: 'self' | 'window' | 'outside'; target: number | null; x: number; y: number } }
+  /** cada janela informa as requisições que tem abertas (e a destacada, o título da aba ativa) */
   'window:setTabInfo': { args: [info: { itemIds: string[]; title: string }]; ret: void }
-  /** traz para a frente a janela destacada que já tem esta requisição; false se nenhuma tem */
+  /** traz para a frente outra janela que já tem esta requisição aberta; false se nenhuma tem */
   'window:focusItem': { args: [itemId: string]; ret: boolean }
 }
 
@@ -376,7 +376,7 @@ export const IPC_CHANNELS: IpcChannel[] = [
   'window:detach',
   'window:claimTab',
   'window:attach',
-  'window:moveToMain',
+  'window:moveTo',
   'window:dragEnd',
   'window:setTabInfo',
   'window:focusItem'

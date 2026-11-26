@@ -1,3 +1,20 @@
+# Revisão de código (26/11/2026, versão 0.2.0)
+
+Revisão das entregas de 25 e 26/11: Runner com detalhe e Pause, barra lateral ajustável, PDF e imagem, Console na resposta e no Runner, barra de abas com scroll e abas em janela separada.
+
+| # | Tipo | Achado | Ajuste |
+|---|---|---|---|
+| 1 | Bug | Soltar uma aba arrastada sobre a URL ou um editor colava o nome da aba ali (o arrasto usava `text/plain`). | Tipo próprio no arrasto (`application/x-jeff-postman-tab`), que nenhum campo aceita. |
+| 2 | Bug | A cada envio a resposta voltava para Pretty, mesmo com Raw escolhido (a resposta é recriada a cada envio). | O último modo escolhido para texto vale nos envios seguintes; binário abre em Preview. Teste e2e. |
+| 3 | Falha | Arrastar uma aba da principal sobre uma janela destacada criava outra janela em vez de juntar a aba àquela. | O main acha a janela do app sob o mouse (a mais recente em foco) e a aba vai para ela (`window:moveTo`). |
+| 4 | Falha | Na janela destacada, abrir pela busca uma requisição aberta na principal criava uma segunda cópia editável. | Todas as janelas informam as requisições abertas; abrir uma que está em outra janela traz aquela janela. Teste e2e. |
+| 5 | Refino | Reordenar arrastando "pulava" entre abas de larguras diferentes. | Só troca de lugar depois de passar do meio da aba. |
+| 6 | Refino | No detalhe do Runner, a aba escolhida (Console, Headers) voltava para Response a cada linha. | A aba e a sub-aba ficam as mesmas ao trocar de linha. Teste e2e. |
+| 7 | Refino | O menu de clique direito da aba podia sair da janela perto da borda. | Posição limitada à janela. |
+| 8 | Refino | A largura da barra lateral e do detalhe do Runner não se reajustava quando a janela diminuía. | Ao redimensionar, vale a largura gravada dentro do limite da janela atual. |
+
+Testes: 111 automáticos e 13 de ponta a ponta. O arrasto real de uma aba para fora da janela (soltar sobre a área de trabalho) não é simulável no Playwright; destacar pelo menu, mover, anexar, fechar e sincronizar estão cobertos.
+
 # Revisão de código (25/11/2026)
 
 Revisão completa do app depois das 9 fases: processo principal (envio HTTP, execução, Runner, OAuth, banco, IPC), sandbox dos scripts, código compartilhado (variáveis, auth, cookies, cURL, Postman, geração de código, data files), tela e CLI. Cada ajuste tem teste novo, e os testes de segurança foram conferidos falhando sem a correção.

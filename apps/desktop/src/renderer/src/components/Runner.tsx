@@ -304,6 +304,9 @@ function RunResults({ tab }: { tab: OpenTab }) {
   const [iter, setIter] = useState<number | 'all'>('all')
   const [open, setOpen] = useState<Record<number, boolean>>({})
   const [sel, setSel] = useState<number | null>(null)
+  // aba e sub-aba do detalhe ficam as mesmas ao trocar de linha (Console, Headers...)
+  const [detailTab, setDetailTab] = useState<DetailTab | null>(null)
+  const [detailSub, setDetailSub] = useState<'body' | 'headers'>('body')
   const side = useResizableWidth('runDetailWidth', 520, 320, 0.7, 'right')
 
   useEffect(() => {
@@ -482,7 +485,14 @@ function RunResults({ tab }: { tab: OpenTab }) {
           <>
             <div className="col-resizer" title="Arraste para ajustar a largura (duplo clique volta ao padrão)" onMouseDown={side.onMouseDown} onDoubleClick={side.reset} />
             <aside className="run-side" style={{ width: side.width }}>
-              <RunDetail key={selected.seq} x={selected} onClose={() => setSel(null)} />
+              <RunDetail
+                x={selected}
+                tab={detailTab ?? (selected.status === null ? 'request' : 'response')}
+                setTab={setDetailTab}
+                sub={detailSub}
+                setSub={setDetailSub}
+                onClose={() => setSel(null)}
+              />
             </aside>
           </>
         )}
@@ -536,9 +546,23 @@ function bodyLanguage(headers: [string, string][] | undefined, body: string): st
 }
 
 /** Painel da direita: a requisição enviada e a resposta recebida, como no Runner do Postman. */
-function RunDetail({ x, onClose }: { x: RunRequestResult; onClose(): void }) {
-  const [tab, setTab] = useState<'response' | 'request' | 'tests' | 'console'>(x.status === null ? 'request' : 'response')
-  const [sub, setSub] = useState<'body' | 'headers'>('body')
+type DetailTab = 'response' | 'request' | 'tests' | 'console'
+
+function RunDetail({
+  x,
+  tab,
+  setTab,
+  sub,
+  setSub,
+  onClose
+}: {
+  x: RunRequestResult
+  tab: DetailTab
+  setTab(t: DetailTab): void
+  sub: 'body' | 'headers'
+  setSub(s: 'body' | 'headers'): void
+  onClose(): void
+}) {
   const pass = x.tests.filter((t) => t.passed).length
   const logCount = (x.logs?.length ?? 0) + (x.scriptErrors?.length ?? 0)
   const headers = tab === 'request' ? x.requestHeaders : x.responseHeaders

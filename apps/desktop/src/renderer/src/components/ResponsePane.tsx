@@ -17,6 +17,9 @@ type View = 'pretty' | 'raw' | 'preview'
 
 const PRETTY_LIMIT = 5 * 1024 * 1024
 
+/** Último modo escolhido para corpo de texto: o envio seguinte abre igual (a resposta é recriada a cada envio). */
+let lastTextView: View = 'pretty'
+
 export function ResponsePane({ run }: { run: RunState | null }) {
   const cancel = useStore((s) => s.cancelActive)
 
@@ -89,15 +92,19 @@ function InlineConsole({ entry }: { entry: ConsoleEntry | undefined }) {
 
 function ResponseView({ res, entry }: { res: HttpResponse; entry?: ConsoleEntry }) {
   const [tab, setTab] = useState<ResTab>('body')
-  const [view, setView] = useState<View>('pretty')
+  const [view, setView] = useState<View>(lastTextView)
   const ct = res.headers.find(([k]) => k.toLowerCase() === 'content-type')?.[1]
   const info = useMemo(() => bodyInfo(res.body, ct), [res, ct])
   const isImage = info.kind === 'image'
   const isPdf = info.kind === 'pdf'
   const isText = info.kind === 'text'
   const toast = useStore((s) => s.showToast)
-  // binário abre direto no Preview; texto volta para o Pretty
-  useEffect(() => setView(isText ? 'pretty' : 'preview'), [isText, res])
+  // binário abre direto no Preview; texto abre como no último envio (Pretty, Raw ou Preview)
+  useEffect(() => setView(isText ? lastTextView : 'preview'), [isText])
+  const chooseView = (v: View) => {
+    setView(v)
+    if (isText) lastTextView = v
+  }
   const text = useMemo(() => (isText ? decodeText(res.body, ct) : ''), [res, ct, isText])
   const lang = languageFromContentType(ct, text)
   const pretty = useMemo(
@@ -160,7 +167,7 @@ function ResponseView({ res, entry }: { res: HttpResponse; entry?: ConsoleEntry 
         <div className="res-body">
           <div className="res-toolbar">
             {(['pretty', 'raw', 'preview'] as View[]).map((v) => (
-              <button key={v} className={`seg ${view === v ? 'active' : ''}`} onClick={() => setView(v)}>
+              <button key={v} className={`seg ${view === v ? 'active' : ''}`} onClick={() => chooseView(v)}>
                 {v[0].toUpperCase() + v.slice(1)}
               </button>
             ))}

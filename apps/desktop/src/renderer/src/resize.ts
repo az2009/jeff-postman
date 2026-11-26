@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type React from 'react'
 
 function load(key: string, def: number): number {
@@ -18,6 +18,12 @@ function load(key: string, def: number): number {
 export function useResizableWidth(key: string, def: number, min: number, maxFraction: number, side: 'left' | 'right') {
   const clamp = useCallback((w: number) => Math.round(Math.max(min, Math.min(w, Math.max(min, window.innerWidth * maxFraction)))), [min, maxFraction])
   const [width, setWidth] = useState(() => clamp(load(key, def)))
+  // janela mudou de tamanho: a largura gravada, dentro do limite da janela de agora (o gravado não muda)
+  useEffect(() => {
+    const onResize = () => setWidth(clamp(load(key, def)))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [clamp, key, def])
 
   const onMouseDown = (e: React.MouseEvent) => {
     e.preventDefault()

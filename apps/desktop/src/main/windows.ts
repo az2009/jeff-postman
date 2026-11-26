@@ -1,5 +1,5 @@
 /**
- * Janelas do app: a principal e as destacadas (uma aba cada, como "Open in New Window" do IntelliJ).
+ * Janelas do app: a principal e as destacadas (com abas próprias, como as janelas destacadas do IntelliJ).
  * Todas nascem aqui com as mesmas proteções. O main guarda a aba em trânsito, sabe qual requisição
  * está em qual janela destacada e avisa as outras janelas quando o banco muda.
  */
@@ -13,13 +13,16 @@ interface Detached {
   win: BrowserWindow
   /** aba esperando a janela pedir (window:claimTab) */
   pending: TabSnapshot | null
-  itemIds: string[]
   /** já pode fechar sem devolver a aba (devolvida, ou não há janela principal) */
   released: boolean
 }
 
 let mainWindow: BrowserWindow | null = null
 const detached = new Map<number, Detached>()
+/** requisições abertas em cada janela (id do webContents), para não abrir a mesma em duas */
+const openItems = new Map<number, string[]>()
+/** janelas da mais recente para a mais antiga em foco: a de cima vence quando se sobrepõem */
+let focusOrder: number[] = []
 
 const DETACHED_SIZE = { width: 1100, height: 760 }
 
@@ -81,6 +84,12 @@ export function createAppWindow(kind: Kind, isAppUrl: (url: string) => boolean, 
   })
 
   const id = win.webContents.id
+  focusOrder.unshift(id)
+  win.on('focus', () => (focusOrder = [id, ...focusOrder.filter((x) => x !== id)]))
+  win.on('closed', () => {
+    focusOrder = focusOrder.filter((x) => x !== id)
+    openItems.delete(id)
+  })
   if (kind === 'main') {
     mainWindow = win
     // sem a principal não há para onde devolver: as destacadas fecham (cada uma pergunta se tiver alteração)
@@ -92,7 +101,7 @@ export function createAppWindow(kind: Kind, isAppUrl: (url: string) => boolean, 
       }
     })
   } else {
-    const entry: Detached = { win, pending: null, itemIds: [], released: false }
+    const entry: Detached = { win, pending: null, released: false }
     detached.set(id, entry)
     // fechar a janela destacada (X) devolve as abas para a principal, como no IntelliJ
     win.on('close', (e) => {
@@ -133,16 +142,23 @@ function contains(b: Rectangle, p: ScreenPoint): boolean {
   return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height
 }
 
-/** Manda abas para a janela principal, na posição de soltar (convertida para a tela da principal). */
-function sendToMain(snapshots: TabSnapshot[], point: ScreenPoint | null): boolean {
-  const main = getMainWindow()
-  if (!main) return false
-  const cb = main.getContentBounds()
+/** Manda abas para uma janela do app, na posição de soltar (convertida para a tela dela). */
+function sendTo(target: BrowserWindow | null, snapshots: TabSnapshot[], point: ScreenPoint | null): boolean {
+  if (!target || target.isDestroyed()) return false
+  const cb = target.getContentBounds()
   const client = point ? { clientX: point.x - cb.x, clientY: point.y - cb.y } : null
-  if (snapshots.length) main.webContents.send('window:attachTab', { snapshots, ...client })
-  if (main.isMinimized()) main.restore()
-  main.focus()
+  if (snapshots.length) target.webContents.send('window:attachTab', { snapshots, ...client })
+  if (target.isMinimized()) target.restore()
+  target.focus()
   return true
+}
+
+/** Janela do app por id do webContents (só as que este módulo criou). */
+function appWindow(id: number): BrowserWindow | null {
+  const main = getMainWindow()
+  if (main && main.webContents.id === id) return main
+  const d = detached.get(id)
+  return d && !d.win.isDestroyed() ? d.win : null
 }
 
 type WindowChannel = Extract<IpcChannel, `window:${string}`>
@@ -165,7 +181,7 @@ export function registerWindowIpc(isAppUrl: (url: string) => boolean): void {
     },
     'window:attach': (e, snapshots) => {
       const d = detached.get(e.sender.id)
-      if (!sendToMain(Array.isArray(snapshots) ? snapshots : [], null)) {
+      if (!sendTo(getMainWindow(), Array.isArray(snapshots) ? snapshots : [], null)) {
         // sem janela principal: fechar aqui é fechar de vez (a tela pergunta se houver alteração)
         if (d) d.released = true
         return false
@@ -177,28 +193,35 @@ export function registerWindowIpc(isAppUrl: (url: string) => boolean): void {
       }
       return true
     },
-    'window:moveToMain': (_e, snapshot, point) => sendToMain([snapshot], point),
+    'window:moveTo': (e, snapshot, point, target) => {
+      const win = target === null ? getMainWindow() : appWindow(Number(target))
+      if (!win || win.webContents.id === e.sender.id) return false
+      return sendTo(win, [snapshot], point)
+    },
     'window:dragEnd': (e) => {
       const p = screen.getCursorScreenPoint()
-      const self = BrowserWindow.fromWebContents(e.sender)
-      if (self && contains(self.getBounds(), p)) return { over: 'self', ...p }
-      const main = getMainWindow()
-      if (main && main !== self && !main.isMinimized() && contains(main.getBounds(), p)) return { over: 'main', ...p }
-      return { over: 'outside', ...p }
+      // a janela de cima naquele ponto (a mais recente em foco), entre as visíveis do app
+      for (const id of focusOrder) {
+        const w = appWindow(id)
+        if (!w || !w.isVisible() || w.isMinimized() || !contains(w.getBounds(), p)) continue
+        if (id === e.sender.id) return { over: 'self', target: null, ...p }
+        return { over: 'window', target: id, ...p }
+      }
+      return { over: 'outside', target: null, ...p }
     },
     'window:setTabInfo': (e, info) => {
+      openItems.set(e.sender.id, Array.isArray(info.itemIds) ? info.itemIds.filter((x) => typeof x === 'string') : [])
       const d = detached.get(e.sender.id)
-      if (!d) return
-      d.itemIds = Array.isArray(info.itemIds) ? info.itemIds.filter((x) => typeof x === 'string') : []
-      d.win.setTitle(`${info.title} · JEFF Postman`)
+      if (d && typeof info.title === 'string') d.win.setTitle(`${info.title} · JEFF Postman`)
     },
-    'window:focusItem': (_e, itemId) => {
-      for (const d of detached.values()) {
-        if (d.itemIds.includes(itemId) && !d.win.isDestroyed()) {
-          if (d.win.isMinimized()) d.win.restore()
-          d.win.focus()
-          return true
-        }
+    'window:focusItem': (e, itemId) => {
+      for (const [id, items] of openItems) {
+        if (id === e.sender.id || !items.includes(itemId)) continue
+        const w = appWindow(id)
+        if (!w) continue
+        if (w.isMinimized()) w.restore()
+        w.focus()
+        return true
       }
       return false
     }

@@ -188,8 +188,8 @@ interface State {
   receiveTabs(snaps: TabSnapshot[], clientX?: number, clientY?: number): void
   /** janela destacada: devolve todas as abas para a principal e a janela fecha */
   attachBack(): Promise<void>
-  /** janela destacada: manda uma aba para a principal, onde foi solta */
-  moveTabToMain(key: string, point: ScreenPoint | null): Promise<void>
+  /** manda uma aba para outra janela do app (target: id da janela; null = a principal), onde foi solta */
+  moveTabTo(key: string, point: ScreenPoint | null, target: number | null): Promise<void>
   /** outra janela mudou algo no banco: recarrega essa parte */
   onDataChanged(c: DataChange): Promise<void>
   updateActive(fn: (doc: RequestDoc) => RequestDoc): void
@@ -634,8 +634,8 @@ export const useStore = create<State>((set, get) => ({
     if (item.kind !== 'request') return
     const existing = get().tabs.find((t) => t.itemId === item.id)
     if (existing) return set({ activeTabKey: existing.key })
-    // já está numa janela destacada: traz aquela janela em vez de abrir uma cópia
-    if (!DETACHED && (await api.invoke('window:focusItem', item.id).catch(() => false))) return
+    // já está aberta em outra janela: traz aquela janela em vez de abrir uma cópia editável
+    if (await api.invoke('window:focusItem', item.id).catch(() => false)) return
     const doc = await api.invoke('items:get', item.id)
     if (!doc) return
     const tab: OpenTab = {
@@ -748,21 +748,22 @@ export const useStore = create<State>((set, get) => ({
       get().showToast('A janela principal não está aberta; as abas continuam aqui', 'bad')
     }
   },
-  async moveTabToMain(key, point) {
+  async moveTabTo(key, point, target) {
     const s = get()
     const tab = s.tabs.find((t) => t.key === key)
     if (!tab) return
     if (tab.run?.state === 'loading') return s.showToast('Espere o envio terminar para mover a aba', 'bad')
-    // a última aba volta com o anexar (que fecha a janela)
-    if (s.tabs.length === 1) {
-      set({ tabs: [], activeTabKey: null })
-      const ok = await api.invoke('window:moveToMain', snapshotOf(tab, s.runs), point).catch(() => false)
-      if (ok) return void (await api.invoke('window:attach', []).catch(() => false))
-      set({ tabs: [tab], activeTabKey: tab.key })
+    // última aba da janela destacada: sai antes, para a janela poder fechar sem perguntar
+    const last = DETACHED && s.tabs.length === 1
+    if (last) set({ tabs: [], activeTabKey: null })
+    const ok = await api.invoke('window:moveTo', snapshotOf(tab, s.runs), point, target).catch(() => false)
+    if (!ok) {
+      if (last) set({ tabs: [tab], activeTabKey: tab.key })
       return
     }
-    const ok = await api.invoke('window:moveToMain', snapshotOf(tab, s.runs), point).catch(() => false)
-    if (ok) get().closeTab(key, true)
+    if (last) return void (await api.invoke('window:attach', []).catch(() => false))
+    get().closeTab(key, true)
+    if (!DETACHED && get().tabs.length === 0) get().newTab()
   },
   async onDataChanged(c) {
     if (c.scope === 'collections') {
