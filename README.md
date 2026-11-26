@@ -4,7 +4,7 @@ Plano completo: [PLANO.md](PLANO.md).
 
 ## Estado
 
-**Todas as 9 fases do plano concluídas em 25/11/2026.** Testes: 101 automáticos (`npm test`; 106 com os arquivos reais em `PM_FILES`) e 6 de ponta a ponta com o app aberto (`npm run test:e2e`).
+**Todas as 9 fases do plano concluídas em 25/11/2026.** Testes: 101 automáticos (`npm test`; 106 com os arquivos reais em `PM_FILES`) e 8 de ponta a ponta com o app aberto (`npm run test:e2e`).
 
 **Revisão de código em 25/11/2026:** 16 ajustes (3 de segurança, 7 bugs, 6 refinos), descritos em [REVISAO.md](REVISAO.md). Os principais: a janela não navega mais para fora da tela do app e o IPC só aceita a tela do app; limite também no corpo descompactado (zip bomb); o pedido de token OAuth 2.0 passa a respeitar proxy, SSL e timeout; o callback do OAuth 2.0 é comparado pelo endereço inteiro; fechar aba ou o app com alteração não salva pede confirmação; a aba não fica mais travada em "Sending..." quando o envio dá erro interno; importa o "Copy as cURL (cmd)" do Chrome.
 
@@ -23,7 +23,7 @@ Fase 8, Collection Runner:
 - Menu da collection → **Run collection** (ou da pasta → **Run folder**, ou **Runner** no rodapé).
 - **Run order** com marcar/desmarcar e arrastar para reordenar; **iterações**, **intervalo** entre requisições, **data file** CSV (vírgula ou ponto e vírgula, aspas) ou JSON com prévia; environment; "Keep variable values" (grava no fim o que os scripts mudaram); "Stop run if an error occurs"; "Save responses".
 - Cada linha do data file é uma iteração: `{{coluna}}` e `pm.iterationData.get("coluna")`. Variáveis gravadas por uma requisição valem nas seguintes da mesma execução. `setNextRequest("Nome")` desvia, `setNextRequest(null)` encerra a iteração, `skipRequest()` pula.
-- Resultados ao vivo: cartões (executadas, duração, testes aprovados/reprovados, erros, tempo médio), filtro All/Passed/Failed e por iteração, detalhe de cada teste e da resposta salva; **Stop**; **Export Results** (JSON no formato do Postman); execuções anteriores guardadas. O Runner não suja o History.
+- Resultados ao vivo: cartões (executadas, duração, testes aprovados/reprovados, erros, tempo médio), filtro All/Passed/Failed e por iteração, clicar numa requisição abre à direita a requisição enviada e a resposta recebida (body e headers de cada uma, e os testes), num painel de largura ajustável, com as setas ↑/↓ passando de uma para outra; **Pause/Resume** (a requisição em andamento termina e a próxima só sai no Resume; o intervalo também espera) e **Stop**; **Export Results** (JSON no formato do Postman); execuções anteriores guardadas. O Runner não suja o History.
 - Medido: 2.000 requisições com 2 scripts cada em ~9 s; memória estável em 3 execuções seguidas (6.000 requisições).
 - **Comando de terminal** (como o Newman): `jeff-postman run colecao.json -e env.json -d dados.csv -n 3 --folder "Pasta" --bail -k --env-var base=... --reporters cli,json --reporter-json-export saida.json`. Código de saída 1 quando algum teste falha (bom para CI). No app instalado: `"<pasta do app>\resources\jeff-postman.cmd" run ...` (usa o Node que vem dentro do app); no projeto: `npm run cli -- run ...`.
 
@@ -88,6 +88,7 @@ Fase 1, envio de requisições:
 - **Headers automáticos** como no Postman (Content-Type pelo corpo, Content-Length, JeffPostman-Token, Host, User-Agent `JeffPostmanRuntime/<versão>`, Accept, Accept-Encoding, Connection); link "N hidden" mostra a lista, e header seu com o mesmo nome substitui o automático.
 - **Redirects** seguidos (até 10; 303, e 301/302 em POST, viram GET; Authorization e Cookie caem ao trocar de host). **gzip, deflate e br** descompactados.
 - **Resposta:** status colorido, tempo com o detalhe (DNS, TCP, SSL, TTFB, download) e tamanho (headers, corpo, descompactado) ao passar o mouse; Body em Pretty (JSON reindentado sem perder número grande), Raw e Preview (HTML em iframe isolado, sem script; imagem); abas Cookies e Headers; erro de rede com a causa ("Could not resolve host", "Connection refused").
+- **Barra lateral ajustável:** arraste a borda direita para alargar ou estreitar (fica lembrado); duplo clique volta ao padrão.
 - **Histórico** no SQLite (últimas 1000), barra lateral History agrupada por dia, busca, abrir de novo e limpar tudo.
 - Divisor arrastável entre requisição e resposta (posição salva).
 

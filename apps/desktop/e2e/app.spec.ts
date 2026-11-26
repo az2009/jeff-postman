@@ -119,6 +119,53 @@ test('Runner roda a collection importada com testes', async () => {
   await expect(page.locator('.run-card', { hasText: 'Executadas' })).toContainText('6')
   await expect(page.locator('.run-card', { hasText: 'Testes aprovados' })).toContainText('6')
   await expect(page.locator('.run-card', { hasText: 'Testes reprovados' })).toContainText('0')
+
+  // clicar na requisição abre a requisição e a resposta à direita
+  await page.locator('.run-row', { hasText: 'Dois' }).first().click()
+  const side = page.locator('.run-side')
+  await expect(side.locator('.rdp-status')).toContainText('200 OK')
+  await expect(side.locator('.code-editor')).toContainText('/dois')
+  await side.locator('.rdp-tab', { hasText: 'Request' }).click()
+  await side.locator('.seg', { hasText: 'Headers' }).click()
+  await expect(side.locator('.rdp-headers')).toContainText('User-Agent')
+  await side.locator('.rdp-tab', { hasText: 'Tests' }).click()
+  await expect(side.locator('.tr-row')).toContainText('caminho')
+  await side.locator('.icon-btn[title="Fechar"]').click()
+  await expect(side).toHaveCount(0)
+})
+
+test('Runner: Pause segura a execução e Resume continua', async () => {
+  await page.locator('.btn', { hasText: 'New Run' }).click()
+  const nums = page.locator('.rc-field input[type=number]')
+  await nums.nth(0).fill('30')
+  await nums.nth(1).fill('150')
+  await page.locator('.run-btn').click()
+  await expect(page.locator('.run-card', { hasText: 'Executadas' })).not.toContainText(/^Executadas0$/)
+  await page.locator('.btn', { hasText: 'Pause' }).click()
+  await expect(page.locator('.run-status')).toHaveText('Pausada')
+  // a requisição em andamento pode terminar; depois disso nada mais sai
+  await page.waitForTimeout(400)
+  const parado = await page.locator('.run-card', { hasText: 'Executadas' }).locator('b').textContent()
+  await page.waitForTimeout(800)
+  await expect(page.locator('.run-card', { hasText: 'Executadas' }).locator('b')).toHaveText(parado!)
+  await page.locator('.btn', { hasText: 'Resume' }).click()
+  await expect(page.locator('.run-status')).toHaveText('Rodando…')
+  await expect(page.locator('.run-card', { hasText: 'Executadas' }).locator('b')).not.toHaveText(parado!, { timeout: 5_000 })
+  await page.locator('.btn', { hasText: 'Stop' }).click()
+  await expect(page.locator('.run-status')).toHaveText('Parada', { timeout: 5_000 })
+})
+
+test('a barra lateral muda de largura arrastando a borda', async () => {
+  const sidebar = page.locator('.sidebar')
+  const w0 = (await sidebar.boundingBox())!.width
+  const h = (await page.locator('.sidebar-resizer').boundingBox())!
+  await page.mouse.move(h.x + h.width / 2, h.y + 200)
+  await page.mouse.down()
+  await page.mouse.move(h.x + h.width / 2 + 150, h.y + 200, { steps: 5 })
+  await page.mouse.up()
+  expect(Math.round((await sidebar.boundingBox())!.width)).toBe(Math.round(w0 + 150))
+  await page.locator('.sidebar-resizer').dblclick()
+  expect(Math.round((await sidebar.boundingBox())!.width)).toBe(330)
 })
 
 test('fechar aba com alteração não salva pede confirmação', async () => {

@@ -8,7 +8,13 @@ import type { Repo } from './db'
 import { clean, executeRequest, type RunContext } from './execute'
 import { cancel } from './http'
 
-const active = new Map<string, { stop: boolean; requestId: string | null }>()
+interface RunFlag {
+  stop: boolean
+  paused: boolean
+  requestId: string | null
+}
+
+const active = new Map<string, { flag: RunFlag; summary: RunSummary; emit: (e: RunnerEvent) => void }>()
 
 /** Requisições de uma collection (ou pasta) na ordem da árvore (pastas de cima para baixo, em profundidade). */
 export function requestOrder(repo: Repo, collectionId: string, folderId: string | null) {
@@ -37,8 +43,21 @@ export function requestOrder(repo: Repo, collectionId: string, folderId: string 
 export function stopRun(runId: string): void {
   const a = active.get(runId)
   if (!a) return
-  a.stop = true
-  if (a.requestId) cancel(a.requestId)
+  a.flag.stop = true
+  if (a.flag.requestId) cancel(a.flag.requestId)
+}
+
+/**
+ * Pausa ou retoma a execução. A requisição em andamento termina normalmente; a próxima só sai
+ * depois do Resume (o intervalo entre requisições também espera).
+ */
+export function pauseRun(runId: string, paused: boolean): void {
+  const a = active.get(runId)
+  if (!a || a.flag.stop || a.flag.paused === paused) return
+  a.flag.paused = paused
+  a.summary.paused = paused
+  a.summary.totalMs = Date.now() - a.summary.startedAt
+  a.emit({ type: 'state', summary: { ...a.summary } })
 }
 
 export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (e: RunnerEvent) => void): RunSummary {
@@ -71,8 +90,8 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
   }
   const storedCfg = { ...cfg, data: cfg.data ? { rows: cfg.data.length } : null }
   repo.saveRun(summary, storedCfg)
-  const flag = { stop: false, requestId: null as string | null }
-  active.set(summary.id, flag)
+  const flag: RunFlag = { stop: false, paused: false, requestId: null }
+  active.set(summary.id, { flag, summary, emit })
   emit({ type: 'started', summary: { ...summary } })
 
   // roda em segundo plano; a tela acompanha pelos eventos
@@ -98,6 +117,7 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
         let idx = 0
         let steps = 0
         while (idx < selected.length) {
+          if (flag.paused) await waitWhilePaused(flag)
           if (flag.stop) break outer
           if (steps++ > 10000) {
             summary.message = 'Mais de 10.000 passos numa iteração (setNextRequest em laço?); iteração interrompida'
@@ -135,6 +155,15 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
             tests,
             error: r.ok ? scriptError : r.cancelled ? 'Parado' : r.skipped ? null : r.error,
             skipped: !r.ok && !!r.skipped
+          }
+          const sent = r.ok ? r.response.request : r.request
+          if (sent) {
+            res.requestHeaders = sent.headers
+            if (sent.bodyPreview) res.requestBody = sent.bodyPreview
+          }
+          if (r.ok) {
+            res.responseHeaders = r.response.headers
+            res.httpVersion = r.response.httpVersion
           }
           if (cfg.saveResponses && r.ok) {
             const b = Buffer.from(r.response.body)
@@ -180,6 +209,7 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
       summary.status = 'error'
       summary.message = (e as Error).message
     } finally {
+      summary.paused = false
       summary.finishedAt = Date.now()
       summary.totalMs = summary.finishedAt - summary.startedAt
       repo.saveRun(summary, storedCfg)
@@ -190,10 +220,25 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
   return { ...summary }
 }
 
-function sleep(ms: number, flag: { stop: boolean }): Promise<void> {
+/** Intervalo entre requisições; o tempo pausado não conta. */
+function sleep(ms: number, flag: RunFlag): Promise<void> {
   return new Promise((resolve) => {
-    const t0 = Date.now()
-    const tick = () => (flag.stop || Date.now() - t0 >= ms ? resolve() : setTimeout(tick, Math.min(50, ms)))
+    let left = ms
+    let last = Date.now()
+    const tick = () => {
+      const now = Date.now()
+      if (!flag.paused) left -= now - last
+      last = now
+      if (flag.stop || left <= 0) resolve()
+      else setTimeout(tick, Math.min(50, Math.max(1, left)))
+    }
+    tick()
+  })
+}
+
+function waitWhilePaused(flag: RunFlag): Promise<void> {
+  return new Promise((resolve) => {
+    const tick = () => (!flag.paused || flag.stop ? resolve() : setTimeout(tick, 50))
     tick()
   })
 }

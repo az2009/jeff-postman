@@ -456,6 +456,11 @@ export const useStore = create<State>((set, get) => ({
         const cur = s.runs[ev.runId] ?? { summary: ev.summary, results: [] }
         return { runs: { ...s.runs, [ev.runId]: { summary: ev.summary, results: [...cur.results, ev.result] } } }
       })
+    } else if (ev.type === 'state') {
+      set((s) => {
+        const cur = s.runs[ev.summary.id] ?? { summary: ev.summary, results: [] }
+        return { runs: { ...s.runs, [ev.summary.id]: { ...cur, summary: ev.summary } } }
+      })
     } else {
       set((s) => {
         const cur = s.runs[ev.summary.id] ?? { summary: ev.summary, results: [] }

@@ -3,7 +3,7 @@ import type { IpcChannel, IpcContract } from '@shared/types'
 import type { Repo } from './db'
 import { cancel, clearCertCache } from './http'
 import { executeRequest } from './execute'
-import { exportRun, requestOrder, startRun, stopRun } from './runner'
+import { exportRun, pauseRun, requestOrder, startRun, stopRun } from './runner'
 import { parseDataFile } from '@shared/datafile'
 import { configFrom, getNewToken, refreshToken } from './oauth2'
 import { getParam, resolveAuth } from '@shared/auth'
@@ -132,6 +132,7 @@ export function registerIpc(repo: Repo, dbPath: string, isAppUrl: (url: string) 
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('runner:event', ev)
       }),
     'runner:stop': (runId) => stopRun(runId),
+    'runner:pause': (runId, paused) => pauseRun(runId, !!paused),
     'runner:list': (collectionId) => repo.listRuns(collectionId),
     'runner:get': (runId) => repo.getRun(runId),
     'runner:delete': (runId) => repo.deleteRun(runId),

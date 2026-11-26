@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
+import type React from 'react'
 import type { RunRequestResult, RunSummary } from '@shared/types'
 import { formatBytes, formatMs } from '@shared/http'
 import { api } from '../api'
 import { Icon } from '../icons'
 import { methodClass, useStore, type OpenTab } from '../store'
+import { prettyJson } from '../format'
+import { useResizableWidth } from '../resize'
+import { CodeEditor } from './CodeEditor'
 
 type OrderItem = { id: string; name: string; method: string; path: string; on: boolean }
 
@@ -27,7 +31,7 @@ function RunConfigView({ tab }: { tab: OpenTab }) {
   const [envId, setEnvId] = useState<string | null>(activeEnvId)
   const [keep, setKeep] = useState(true)
   const [stopOnError, setStopOnError] = useState(false)
-  const [saveResponses, setSaveResponses] = useState(false)
+  const [saveResponses, setSaveResponses] = useState(true)
   const [data, setData] = useState<{ name: string; columns: string[]; rows: Record<string, string>[] } | null>(null)
   const [preview, setPreview] = useState(false)
   const [drag, setDrag] = useState<number | null>(null)
@@ -208,7 +212,7 @@ function RunConfigView({ tab }: { tab: OpenTab }) {
           </label>
           <label className="rc-check">
             <input type="checkbox" checked={saveResponses} onChange={(e) => setSaveResponses(e.target.checked)} />
-            Save responses <span className="muted">(até 64 KB por resposta)</span>
+            Save responses <span className="muted">(guarda o corpo, até 64 KB por resposta, para ver ao clicar na requisição)</span>
           </label>
           <button className="btn primary run-btn" disabled={!r.collectionId || !selected.length || busy} onClick={run}>
             Run {r.name || 'collection'}
@@ -297,10 +301,13 @@ function RunResults({ tab }: { tab: OpenTab }) {
   const [filter, setFilter] = useState<'all' | 'passed' | 'failed'>('all')
   const [iter, setIter] = useState<number | 'all'>('all')
   const [open, setOpen] = useState<Record<number, boolean>>({})
+  const [sel, setSel] = useState<number | null>(null)
+  const side = useResizableWidth('runDetailWidth', 520, 320, 0.7, 'right')
 
   useEffect(() => {
     if (r.runId && !live) loadRun(r.runId)
   }, [r.runId, live, loadRun])
+  useEffect(() => setSel(null), [r.runId])
 
   const results = live?.results ?? []
   const s = live?.summary
@@ -312,13 +319,26 @@ function RunResults({ tab }: { tab: OpenTab }) {
       ),
     [results, filter, iter]
   )
+  const selected = sel === null ? undefined : results.find((x) => x.seq === sel)
   if (!s) return <div className="placeholder pad">Carregando…</div>
   const running = s.status === 'running'
+  const paused = running && !!s.paused
   const groups: [number, RunRequestResult[]][] = []
   for (const x of shown) {
     const g = groups[groups.length - 1]
     if (g && g[0] === x.iteration) g[1].push(x)
     else groups.push([x.iteration, [x]])
+  }
+  // setas para cima e para baixo trocam a requisição aberta no painel
+  const onListKey = (e: React.KeyboardEvent) => {
+    if (sel === null || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return
+    const i = shown.findIndex((x) => x.seq === sel)
+    const n = shown[i + (e.key === 'ArrowDown' ? 1 : -1)]
+    if (n) {
+      e.preventDefault()
+      setSel(n.seq)
+      document.getElementById(`run-row-${n.seq}`)?.scrollIntoView({ block: 'nearest' })
+    }
   }
 
   return (
@@ -326,12 +346,23 @@ function RunResults({ tab }: { tab: OpenTab }) {
       <div className="runner-head">
         <Icon name="runner" size={18} />
         <span className="vars-title">{s.name}</span>
-        <span className={`run-status st-${s.status}`}>{{ running: 'Rodando…', finished: 'Concluída', stopped: 'Parada', error: 'Erro' }[s.status]}</span>
+        <span className={`run-status st-${paused ? 'paused' : s.status}`}>
+          {paused ? 'Pausada' : { running: 'Rodando…', finished: 'Concluída', stopped: 'Parada', error: 'Erro' }[s.status]}
+        </span>
         <div className="spacer" />
         {running ? (
-          <button className="btn small" onClick={() => api.invoke('runner:stop', s.id)}>
-            Stop
-          </button>
+          <>
+            <button
+              className="btn small ghost"
+              title={paused ? 'Continuar de onde parou' : 'Pausar depois da requisição em andamento'}
+              onClick={() => api.invoke('runner:pause', s.id, !paused)}
+            >
+              {paused ? 'Resume' : 'Pause'}
+            </button>
+            <button className="btn small" onClick={() => api.invoke('runner:stop', s.id)}>
+              Stop
+            </button>
+          </>
         ) : (
           <>
             <button
@@ -361,7 +392,11 @@ function RunResults({ tab }: { tab: OpenTab }) {
         <Card label="Erros" value={String(s.errors)} cls={s.errors ? 'bad' : ''} />
         <Card label="Tempo médio" value={`${s.avgMs} ms`} />
       </div>
-      {running && <div className="run-progress"><div style={{ width: `${Math.min(100, (s.executed / Math.max(1, (tab.runner!.total ?? s.executed) || 1)) * 100)}%` }} /></div>}
+      {running && (
+        <div className={`run-progress ${paused ? 'paused' : ''}`}>
+          <div style={{ width: `${Math.min(100, (s.executed / Math.max(1, (tab.runner!.total ?? s.executed) || 1)) * 100)}%` }} />
+        </div>
+      )}
       <div className="tr-filters run-filters">
         {(['all', 'passed', 'failed'] as const).map((f) => (
           <button key={f} className={`seg ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f)}>
@@ -377,61 +412,200 @@ function RunResults({ tab }: { tab: OpenTab }) {
           ))}
         </select>
       </div>
-      <div className="run-list">
-        {groups.map(([it, rows]) => (
-          <div key={it}>
-            <div className="group-label">Iteração {it + 1}</div>
-            {rows.map((x) => {
-              const pass = x.tests.filter((t) => t.passed).length
-              const fail = x.tests.filter((t) => !t.passed && !t.skipped).length
-              return (
-                <div key={x.seq} className="run-row-wrap">
-                  <div className={`run-row ${failed(x) ? 'bad' : ''}`} onClick={() => setOpen((o) => ({ ...o, [x.seq]: !o[x.seq] }))}>
-                    <span className={`row-caret ${open[x.seq] ? 'open' : ''}`}>
-                      <Icon name="chevron" size={11} />
-                    </span>
-                    <span className={`row-method ${methodClass(x.method as never)}`}>{x.method === 'DELETE' ? 'DEL' : x.method}</span>
-                    <span className="runner-name">{x.name}</span>
-                    <span className="runner-path" title={x.url}>
-                      {x.url}
-                    </span>
-                    <span className="spacer" />
-                    {x.skipped ? (
-                      <span className="muted">pulada</span>
-                    ) : x.status !== null ? (
-                      <span className={`console-status ${x.status >= 400 ? 'bad' : ''}`}>
-                        {x.status} {x.statusText}
+      <div className="run-split">
+        <div className="run-list" tabIndex={0} onKeyDown={onListKey}>
+          {groups.map(([it, rows]) => (
+            <div key={it}>
+              <div className="group-label">Iteração {it + 1}</div>
+              {rows.map((x) => {
+                const pass = x.tests.filter((t) => t.passed).length
+                const fail = x.tests.filter((t) => !t.passed && !t.skipped).length
+                return (
+                  <div key={x.seq} className="run-row-wrap">
+                    <div
+                      id={`run-row-${x.seq}`}
+                      className={`run-row ${failed(x) ? 'bad' : ''} ${sel === x.seq ? 'selected' : ''}`}
+                      onClick={() => setSel(x.seq)}
+                    >
+                      <span
+                        className={`row-caret ${open[x.seq] ? 'open' : ''}`}
+                        title="Mostrar os testes aqui"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setOpen((o) => ({ ...o, [x.seq]: !o[x.seq] }))
+                        }}
+                      >
+                        <Icon name="chevron" size={11} />
                       </span>
-                    ) : null}
-                    {x.status !== null && <span className="muted">{x.timeMs} ms · {formatBytes(x.size)}</span>}
-                    {(pass > 0 || fail > 0) && (
-                      <span className="run-tests">
-                        <span className="ok">{pass}✓</span> <span className={fail ? 'bad' : 'muted'}>{fail}✗</span>
+                      <span className={`row-method ${methodClass(x.method as never)}`}>{x.method === 'DELETE' ? 'DEL' : x.method}</span>
+                      <span className="runner-name">{x.name}</span>
+                      <span className="runner-path" title={x.url}>
+                        {x.url}
                       </span>
+                      <span className="spacer" />
+                      {x.skipped ? (
+                        <span className="muted">pulada</span>
+                      ) : x.status !== null ? (
+                        <span className={`console-status ${x.status >= 400 ? 'bad' : ''}`}>
+                          {x.status} {x.statusText}
+                        </span>
+                      ) : null}
+                      {x.status !== null && (
+                        <span className="muted">
+                          {x.timeMs} ms · {formatBytes(x.size)}
+                        </span>
+                      )}
+                      {(pass > 0 || fail > 0) && (
+                        <span className="run-tests">
+                          <span className="ok">{pass}✓</span> <span className={fail ? 'bad' : 'muted'}>{fail}✗</span>
+                        </span>
+                      )}
+                    </div>
+                    {x.error && <div className="run-err mono">{x.error}</div>}
+                    {open[x.seq] && (
+                      <div className="run-detail">
+                        <TestList tests={x.tests} />
+                      </div>
                     )}
                   </div>
-                  {x.error && <div className="run-err mono">{x.error}</div>}
-                  {open[x.seq] && (
-                    <div className="run-detail">
-                      {x.tests.length === 0 && <div className="muted">Sem testes.</div>}
-                      {x.tests.map((t, i) => (
-                        <div key={i} className="tr-row">
-                          <span className={`tr-badge ${t.skipped ? 'skip' : t.passed ? 'ok' : 'bad'}`}>{t.skipped ? 'SKIPPED' : t.passed ? 'PASS' : 'FAIL'}</span>
-                          <div className="tr-text">
-                            <span>{t.name}</span>
-                            {t.error && <span className="tr-err mono">{t.error}</span>}
-                          </div>
-                        </div>
-                      ))}
-                      {x.responseBody !== undefined && <pre className="console-body">{x.responseBody}</pre>}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
+          ))}
+          {shown.length === 0 && (
+            <div className="placeholder pad">{running ? (paused ? 'Pausada.' : 'Aguardando resultados…') : 'Nada com esse filtro.'}</div>
+          )}
+        </div>
+        {selected && (
+          <>
+            <div className="col-resizer" title="Arraste para ajustar a largura (duplo clique volta ao padrão)" onMouseDown={side.onMouseDown} onDoubleClick={side.reset} />
+            <aside className="run-side" style={{ width: side.width }}>
+              <RunDetail key={selected.seq} x={selected} onClose={() => setSel(null)} />
+            </aside>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TestList({ tests }: { tests: RunRequestResult['tests'] }) {
+  if (tests.length === 0) return <div className="muted">Sem testes.</div>
+  return (
+    <>
+      {tests.map((t, i) => (
+        <div key={i} className="tr-row">
+          <span className={`tr-badge ${t.skipped ? 'skip' : t.passed ? 'ok' : 'bad'}`}>{t.skipped ? 'SKIPPED' : t.passed ? 'PASS' : 'FAIL'}</span>
+          <div className="tr-text">
+            <span>{t.name}</span>
+            {t.error && <span className="tr-err mono">{t.error}</span>}
           </div>
+        </div>
+      ))}
+    </>
+  )
+}
+
+function bodyLanguage(headers: [string, string][] | undefined, body: string): string {
+  const ct = headers?.find(([k]) => k.toLowerCase() === 'content-type')?.[1].toLowerCase() ?? ''
+  const t = body.trimStart()
+  if (ct.includes('json') || t.startsWith('{') || t.startsWith('[')) return 'json'
+  if (ct.includes('html')) return 'html'
+  if (ct.includes('xml') || t.startsWith('<')) return 'xml'
+  return 'plaintext'
+}
+
+/** Painel da direita: a requisição enviada e a resposta recebida, como no Runner do Postman. */
+function RunDetail({ x, onClose }: { x: RunRequestResult; onClose(): void }) {
+  const [tab, setTab] = useState<'response' | 'request' | 'tests'>(x.status === null ? 'request' : 'response')
+  const [sub, setSub] = useState<'body' | 'headers'>('body')
+  const pass = x.tests.filter((t) => t.passed).length
+  const headers = tab === 'request' ? x.requestHeaders : x.responseHeaders
+  const rawBody = tab === 'request' ? x.requestBody : x.responseBody
+  const body = rawBody === undefined ? undefined : prettyJson(rawBody)
+  const lang = body === undefined ? 'plaintext' : bodyLanguage(headers, body)
+
+  return (
+    <div className="run-detail-pane">
+      <div className="rdp-head">
+        <span className={`row-method ${methodClass(x.method as never)}`}>{x.method === 'DELETE' ? 'DEL' : x.method}</span>
+        <span className="rdp-title" title={x.name}>
+          {x.name}
+        </span>
+        <span className="muted">Iteração {x.iteration + 1}</span>
+        <button className="icon-btn" title="Fechar" onClick={onClose}>
+          <Icon name="close" size={12} />
+        </button>
+      </div>
+      <div className="rdp-url mono" title={x.url}>
+        {x.url}
+      </div>
+      <div className="rdp-status">
+        {x.status !== null ? (
+          <>
+            <span className={`console-status ${x.status >= 400 ? 'bad' : ''}`}>
+              {x.status} {x.statusText}
+            </span>
+            <span className="muted">
+              {x.timeMs} ms · {formatBytes(x.size)}
+              {x.httpVersion ? ` · HTTP/${x.httpVersion}` : ''}
+            </span>
+          </>
+        ) : x.skipped ? (
+          <span className="muted">Requisição pulada (pm.execution.skipRequest).</span>
+        ) : (
+          <span className="rdp-error mono">{x.error ?? 'Sem resposta.'}</span>
+        )}
+      </div>
+      <div className="rdp-tabs">
+        {(['response', 'request', 'tests'] as const).map((t) => (
+          <button key={t} className={`rdp-tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
+            {t === 'response' ? 'Response' : t === 'request' ? 'Request' : `Tests (${pass}/${x.tests.length})`}
+          </button>
         ))}
-        {shown.length === 0 && <div className="placeholder pad">{running ? 'Aguardando resultados…' : 'Nada com esse filtro.'}</div>}
+        <div className="spacer" />
+        {tab !== 'tests' && (
+          <>
+            <button className={`seg ${sub === 'body' ? 'active' : ''}`} onClick={() => setSub('body')}>
+              Body
+            </button>
+            <button className={`seg ${sub === 'headers' ? 'active' : ''}`} onClick={() => setSub('headers')}>
+              Headers{headers ? ` (${headers.length})` : ''}
+            </button>
+          </>
+        )}
+      </div>
+      <div className="rdp-body">
+        {tab === 'tests' ? (
+          <div className="rdp-tests">
+            <TestList tests={x.tests} />
+          </div>
+        ) : sub === 'headers' ? (
+          headers && headers.length ? (
+            <table className="kv-table ro rdp-headers">
+              <tbody>
+                {headers.map(([k, v], i) => (
+                  <tr key={i}>
+                    <td>{k}</td>
+                    <td className="mono">{v}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="placeholder pad">{tab === 'response' && x.status === null ? 'Não houve resposta.' : 'Sem headers registrados.'}</div>
+          )
+        ) : body !== undefined && body !== '' ? (
+          <CodeEditor value={body} language={lang} readOnly wordWrap />
+        ) : (
+          <div className="placeholder pad">
+            {tab === 'request'
+              ? 'A requisição não teve corpo.'
+              : x.status === null
+                ? 'Não houve resposta.'
+                : 'O corpo da resposta não foi guardado. Marque "Save responses" na configuração da execução.'}
+          </div>
+        )}
       </div>
     </div>
   )

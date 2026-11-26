@@ -3,6 +3,7 @@ import { CollectionTree, methodLabel } from './CollectionTree'
 import { api } from '../api'
 import { Icon } from '../icons'
 import { methodClass, useStore, type SidebarView } from '../store'
+import { useResizableWidth } from '../resize'
 
 const RAIL: { id: SidebarView; label: string }[] = [
   { id: 'collections', label: 'Collections' },
@@ -13,8 +14,9 @@ const RAIL: { id: SidebarView; label: string }[] = [
 export function Sidebar() {
   const view = useStore((s) => s.sidebarView)
   const setView = useStore((s) => s.setSidebarView)
+  const { width, onMouseDown, reset } = useResizableWidth('sidebarWidth', 330, 240, 0.6, 'left')
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={{ width }}>
       <nav className="rail">
         {RAIL.map((r) => (
           <button key={r.id} className={`rail-btn ${view === r.id ? 'active' : ''}`} onClick={() => setView(r.id)}>
@@ -28,6 +30,7 @@ export function Sidebar() {
         {view === 'environments' && <EnvironmentsPanel />}
         {view === 'history' && <HistoryPanel />}
       </div>
+      <div className="col-resizer sidebar-resizer" title="Arraste para ajustar a largura (duplo clique volta ao padrão)" onMouseDown={onMouseDown} onDoubleClick={reset} />
     </aside>
   )
 }

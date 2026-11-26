@@ -255,6 +255,7 @@ export interface IpcContract {
   'runner:order': { args: [collectionId: string, folderId: string | null]; ret: { id: string; name: string; method: string; path: string }[] }
   'runner:start': { args: [config: RunConfig]; ret: RunSummary }
   'runner:stop': { args: [runId: string]; ret: void }
+  'runner:pause': { args: [runId: string, paused: boolean]; ret: void }
   'runner:list': { args: [collectionId: string | null]; ret: RunSummary[] }
   'runner:get': { args: [runId: string]; ret: { summary: RunSummary; results: RunRequestResult[] } | null }
   'runner:delete': { args: [runId: string]; ret: void }
@@ -325,6 +326,7 @@ export const IPC_CHANNELS: IpcChannel[] = [
   'runner:order',
   'runner:start',
   'runner:stop',
+  'runner:pause',
   'runner:list',
   'runner:get',
   'runner:delete',
@@ -509,7 +511,14 @@ export interface RunRequestResult {
   tests: TestResult[]
   error: string | null
   skipped: boolean
+  /** corpo da resposta (até 64 KB), só com "Save responses" */
   responseBody?: string
+  /** detalhe para o painel da direita no resultado do Runner */
+  requestHeaders?: [string, string][]
+  /** corpo enviado como texto (até 64 KB) */
+  requestBody?: string
+  responseHeaders?: [string, string][]
+  httpVersion?: string
 }
 
 export interface RunSummary {
@@ -530,11 +539,14 @@ export interface RunSummary {
   avgMs: number
   totalMs: number
   message?: string
+  /** execução pausada pelo botão Pause (status continua 'running') */
+  paused?: boolean
 }
 
 export type RunnerEvent =
   | { type: 'started'; summary: RunSummary }
   | { type: 'result'; runId: string; result: RunRequestResult; summary: RunSummary }
+  | { type: 'state'; summary: RunSummary }
   | { type: 'finished'; summary: RunSummary }
 
 // ---------- configurações, cookies e busca ----------
