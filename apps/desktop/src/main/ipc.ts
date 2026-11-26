@@ -11,7 +11,8 @@ import { makeLookup, type Scope } from '@shared/variables'
 import { countRequests, exportCollection, exportEnvironment, parsePostman, safeFileName } from '@shared/postman'
 import { looksLikeCurl, parseCurl } from '@shared/curl'
 import { readFile, writeFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
+import { sanitizeName } from '@shared/binary'
 import type { ImportResult } from '@shared/types'
 
 type Handlers = {
@@ -154,6 +155,20 @@ export function registerIpc(repo: Repo, dbPath: string, isAppUrl: (url: string) 
       if (!run) throw new Error('Execução não encontrada')
       const stamp = new Date(run.summary.startedAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
       return saveJson(`${safeFileName(run.summary.name)}.postman_test_run-${stamp}.json`, exportRun(run.summary, run.results))
+    },
+    'response:saveFile': async (body, suggestedName) => {
+      const name = sanitizeName(String(suggestedName ?? '')) ?? 'response'
+      const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1]
+      const win = BrowserWindow.getFocusedWindow()
+      const opts: Electron.SaveDialogOptions = {
+        title: 'Salvar resposta',
+        defaultPath: join(app.getPath('downloads'), name),
+        filters: [...(ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : []), { name: 'Todos os arquivos', extensions: ['*'] }]
+      }
+      const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+      if (r.canceled || !r.filePath) return null
+      await writeFile(r.filePath, Buffer.from(body instanceof Uint8Array ? body : new Uint8Array(body as ArrayLike<number>)))
+      return r.filePath
     },
     'settings:get': () => repo.getSettings(),
     'settings:set': (s) => {

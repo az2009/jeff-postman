@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { bodyInfo } from '@shared/binary'
 import { formatBytes, formatMs } from '@shared/http'
 import { Icon } from '../icons'
 import { api } from '../api'
@@ -230,7 +231,8 @@ const Kv = ({ k, v }: { k: string; v: string }) => (
 )
 
 function bodyText(bytes: Uint8Array, ct: string | undefined): string {
-  if (/^(image|audio|video)\/|octet-stream|pdf|zip/i.test(ct ?? '')) return `<${bytes.byteLength} bytes, ${ct}>`
+  const info = bodyInfo(bytes, ct)
+  if (info.kind !== 'text') return `[binário: ${info.mime}, ${bytes.byteLength} bytes]`
   const cut = bytes.byteLength > BODY_LIMIT
   const t = decodeText(cut ? bytes.subarray(0, BODY_LIMIT) : bytes, ct)
   const pretty = /json/i.test(ct ?? '') && !cut ? prettyJson(t) : t

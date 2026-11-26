@@ -38,7 +38,9 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      // visualizador de PDF embutido do Chromium (Preview de resposta em PDF)
+      plugins: true
     }
   })
 

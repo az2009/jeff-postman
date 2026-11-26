@@ -599,7 +599,9 @@ function RunDetail({ x, onClose }: { x: RunRequestResult; onClose(): void }) {
           <CodeEditor value={body} language={lang} readOnly wordWrap />
         ) : (
           <div className="placeholder pad">
-            {tab === 'request'
+            {tab === 'response' && x.responseBinary
+              ? `Conteúdo binário (${x.responseBinary.mime}, ${formatBytes(x.responseBinary.size)}): o Runner não guarda arquivos. Para ver, abra a requisição e envie de novo.`
+              : tab === 'request'
               ? 'A requisição não teve corpo.'
               : x.status === null
                 ? 'Não houve resposta.'

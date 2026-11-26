@@ -7,6 +7,7 @@ import type { KeyValue, RequestDoc, RunConfig, RunnerEvent, RunRequestResult, Ru
 import type { Repo } from './db'
 import { clean, executeRequest, type RunContext } from './execute'
 import { cancel } from './http'
+import { bodyInfo } from '@shared/binary'
 
 interface RunFlag {
   stop: boolean
@@ -165,7 +166,9 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
             res.responseHeaders = r.response.headers
             res.httpVersion = r.response.httpVersion
           }
-          if (cfg.saveResponses && r.ok) {
+          const info = r.ok ? bodyInfo(r.response.body, r.response.headers.find(([k]) => k.toLowerCase() === 'content-type')?.[1]) : null
+          if (cfg.saveResponses && r.ok && info && info.kind !== 'text') res.responseBinary = { mime: info.mime, size: r.response.body.byteLength }
+          else if (cfg.saveResponses && r.ok) {
             const b = Buffer.from(r.response.body)
             res.responseBody = b.subarray(0, 64 * 1024).toString('utf8') + (b.length > 64 * 1024 ? `\n… (${b.length - 64 * 1024} bytes a mais)` : '')
           }

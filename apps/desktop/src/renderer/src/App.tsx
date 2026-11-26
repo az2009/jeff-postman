@@ -130,50 +130,137 @@ function Header() {
   )
 }
 
+function tabTitleOf(t: OpenTab): string {
+  if (t.runner) return `Runner${t.runner.name ? ` · ${t.runner.name}` : ''}`
+  if (t.vars) return t.vars.name
+  if (t.authOf) return `${t.authOf.name} · ${t.authOf.section === 'scripts' ? 'Scripts' : 'Authorization'}`
+  return t.doc.name === 'Untitled Request' && t.doc.request.url.raw ? t.doc.request.url.raw : t.doc.name
+}
+
+function TabIcon({ t }: { t: OpenTab }) {
+  if (t.runner)
+    return (
+      <span className="tab-method tab-icon">
+        <Icon name="runner" size={13} />
+      </span>
+    )
+  if (t.authOf)
+    return (
+      <span className="tab-method tab-icon">
+        <Icon name="lock" size={13} />
+      </span>
+    )
+  if (t.vars)
+    return (
+      <span className="tab-method tab-icon">
+        <Icon name={t.vars.scope.type === 'globals' ? 'globe' : t.vars.scope.type === 'collection' ? 'collections' : 'environments'} size={13} />
+      </span>
+    )
+  return <span className={`tab-method ${methodClass(t.doc.request.method)}`}>{t.doc.request.method}</span>
+}
+
 function TabBar() {
   const tabs = useStore((s) => s.tabs)
   const active = useStore((s) => s.activeTabKey)
   const activate = useStore((s) => s.activateTab)
   const close = useStore((s) => s.closeTab)
   const newTab = useStore((s) => s.newTab)
+  const ref = useRef<HTMLDivElement>(null)
+  const [edge, setEdge] = useState({ left: false, right: false })
+  const [list, setList] = useState(false)
+
+  // setas aparecem só quando as abas não cabem; cada lado some ao chegar no fim
+  const measure = () => {
+    const el = ref.current
+    if (!el) return
+    const left = el.scrollLeft > 1
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+    setEdge((e) => (e.left === left && e.right === right ? e : { left, right }))
+  }
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  useEffect(measure, [tabs])
+  // a aba ativa sempre fica à vista
+  useEffect(() => {
+    ref.current?.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [active, tabs.length])
+  const scrollBy = (dir: 1 | -1) => ref.current?.scrollBy({ left: dir * Math.max(200, (ref.current?.clientWidth ?? 400) * 0.7), behavior: 'smooth' })
+  const overflow = edge.left || edge.right
+
   return (
     <div className="tabbar">
-      <div className="tabs">
+      {overflow && (
+        <button className="icon-btn tab-scroll" title="Abas à esquerda" disabled={!edge.left} onClick={() => scrollBy(-1)}>
+          <Icon name="chevron" size={12} style={{ transform: 'rotate(180deg)' }} />
+        </button>
+      )}
+      <div
+        className="tabs"
+        ref={ref}
+        onScroll={measure}
+        onWheel={(e) => {
+          // roda do mouse (vertical) também anda pelas abas
+          if (ref.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) ref.current.scrollLeft += e.deltaY
+        }}
+      >
         {tabs.map((t) => (
           <div
             key={t.key}
             className={`tab ${t.key === active ? 'active' : ''}`}
+            title={tabTitleOf(t)}
             onClick={() => activate(t.key)}
             onMouseDown={(e) => e.button === 1 && (e.preventDefault(), close(t.key))}
           >
-            {t.runner ? (
-              <span className="tab-method tab-icon">
-                <Icon name="runner" size={13} />
-              </span>
-            ) : t.authOf ? (
-              <span className="tab-method tab-icon">
-                <Icon name="lock" size={13} />
-              </span>
-            ) : t.vars ? (
-              <span className="tab-method tab-icon">
-                <Icon name={t.vars.scope.type === 'globals' ? 'globe' : t.vars.scope.type === 'collection' ? 'collections' : 'environments'} size={13} />
-              </span>
-            ) : (
-              <span className={`tab-method ${methodClass(t.doc.request.method)}`}>{t.doc.request.method}</span>
-            )}
-            <span className="tab-name">
-              {t.runner ? `Runner${t.runner.name ? ` · ${t.runner.name}` : ''}` : t.vars ? t.vars.name : t.authOf ? `${t.authOf.name} · ${t.authOf.section === 'scripts' ? 'Scripts' : 'Authorization'}` : null}
-              {t.vars || t.authOf || t.runner ? null : t.doc.name === 'Untitled Request' && t.doc.request.url.raw ? t.doc.request.url.raw : t.doc.name}
-            </span>
+            <TabIcon t={t} />
+            <span className="tab-name">{tabTitleOf(t)}</span>
             <button className="tab-close" onClick={(e) => (e.stopPropagation(), close(t.key))}>
               {t.dirty ? <span className="dirty-dot" /> : <Icon name="close" size={12} />}
             </button>
           </div>
         ))}
-        <button className="icon-btn tab-add" title="New tab (Ctrl+T)" onClick={() => newTab()}>
-          <Icon name="plus" />
-        </button>
       </div>
+      {overflow && (
+        <button className="icon-btn tab-scroll" title="Abas à direita" disabled={!edge.right} onClick={() => scrollBy(1)}>
+          <Icon name="chevron" size={12} />
+        </button>
+      )}
+      <button className="icon-btn tab-add" title="New tab (Ctrl+T)" onClick={() => newTab()}>
+        <Icon name="plus" />
+      </button>
+      {tabs.length > 1 && (
+        <div className="tab-list-wrap">
+          <button className={`icon-btn tab-list-btn ${list ? 'active' : ''}`} title={`Abas abertas (${tabs.length})`} onClick={() => setList((v) => !v)}>
+            <Icon name="chevron" size={12} style={{ transform: 'rotate(90deg)' }} />
+            <span className="tab-count">{tabs.length}</span>
+          </button>
+          {list && (
+            <>
+              <div className="menu-backdrop" onMouseDown={() => setList(false)} />
+              <div className="menu tab-list">
+                {tabs.map((t) => (
+                  <button
+                    key={t.key}
+                    className={t.key === active ? 'current' : ''}
+                    onClick={() => {
+                      activate(t.key)
+                      setList(false)
+                    }}
+                  >
+                    <TabIcon t={t} />
+                    <span className="tab-name">{tabTitleOf(t)}</span>
+                    {t.dirty && <span className="dirty-dot" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
       <EnvSelector />
     </div>
   )

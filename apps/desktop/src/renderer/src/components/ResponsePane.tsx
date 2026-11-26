@@ -7,6 +7,8 @@ import { CodeEditor } from './CodeEditor'
 import { TestResults, testCounts } from './TestResults'
 import type { ScriptsReport } from '@shared/types'
 import { decodeText, languageFromContentType, prettyJson } from '../format'
+import { bodyInfo, dispositionFilename } from '@shared/binary'
+import { api } from '../api'
 
 type ResTab = 'body' | 'cookies' | 'headers' | 'tests'
 type View = 'pretty' | 'raw' | 'preview'
@@ -68,20 +70,48 @@ function ResponseView({ res }: { res: HttpResponse }) {
   const [tab, setTab] = useState<ResTab>('body')
   const [view, setView] = useState<View>('pretty')
   const ct = res.headers.find(([k]) => k.toLowerCase() === 'content-type')?.[1]
-  const isImage = /^image\//i.test(ct ?? '')
-  const text = useMemo(() => (isImage ? '' : decodeText(res.body, ct)), [res, ct, isImage])
+  const info = useMemo(() => bodyInfo(res.body, ct), [res, ct])
+  const isImage = info.kind === 'image'
+  const isPdf = info.kind === 'pdf'
+  const isText = info.kind === 'text'
+  const toast = useStore((s) => s.showToast)
+  // binário abre direto no Preview; texto volta para o Pretty
+  useEffect(() => setView(isText ? 'pretty' : 'preview'), [isText, res])
+  const text = useMemo(() => (isText ? decodeText(res.body, ct) : ''), [res, ct, isText])
   const lang = languageFromContentType(ct, text)
   const pretty = useMemo(
     () => (lang === 'json' && text.length <= PRETTY_LIMIT ? prettyJson(text) : text),
     [text, lang]
   )
   const cookies = useMemo(() => parseSetCookies(res.headers), [res])
-  const imgUrl = useMemo(() => {
-    if (!isImage) return null
+  const blobUrl = useMemo(() => {
+    if (!isImage && !isPdf) return null
     const copy = new Uint8Array(res.body)
-    return URL.createObjectURL(new Blob([copy.buffer], { type: ct }))
-  }, [res, isImage, ct])
-  useEffect(() => () => void (imgUrl && URL.revokeObjectURL(imgUrl)), [imgUrl])
+    return URL.createObjectURL(new Blob([copy.buffer], { type: info.mime }))
+  }, [res, isImage, isPdf, info.mime])
+  useEffect(() => () => void (blobUrl && URL.revokeObjectURL(blobUrl)), [blobUrl])
+  const [dims, setDims] = useState<string | null>(null)
+  useEffect(() => setDims(null), [blobUrl])
+  const saveFile = async () => {
+    const disp = res.headers.find(([k]) => k.toLowerCase() === 'content-disposition')?.[1]
+    let name = dispositionFilename(disp)
+    if (!name) {
+      let last = ''
+      try {
+        last = decodeURIComponent(new URL(res.url).pathname.split('/').pop() ?? '')
+      } catch {
+        /* URL inválida */
+      }
+      name = /\.[a-z0-9]{1,8}$/i.test(last) ? last : `response.${info.ext}`
+    }
+    try {
+      const p = await api.invoke('response:saveFile', new Uint8Array(res.body), name)
+      if (p) toast(`Resposta salva em ${p}`)
+    } catch (e) {
+      toast(`Não foi possível salvar: ${(e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, 'bad')
+    }
+  }
+  const kindLabel = isPdf ? 'PDF' : isImage ? `Image${dims ? ` · ${dims}` : ''}` : !isText ? 'Binary' : lang === 'plaintext' ? 'Text' : lang.toUpperCase()
 
   return (
     <div className="response-view">
@@ -112,17 +142,54 @@ function ResponseView({ res }: { res: HttpResponse }) {
                 {v[0].toUpperCase() + v.slice(1)}
               </button>
             ))}
-            <span className="lang-tag">{isImage ? 'Image' : lang === 'plaintext' ? 'Text' : lang.toUpperCase()}</span>
+            <span className="lang-tag">{kindLabel}</span>
             <div className="spacer" />
-            {!isImage && (
+            <button className="icon-btn" title="Save response to file" onClick={saveFile}>
+              <Icon name="import" size={14} />
+            </button>
+            {isText && (
               <button className="icon-btn" title="Copy response" onClick={() => navigator.clipboard.writeText(text)}>
                 ⧉
               </button>
             )}
           </div>
-          {isImage && imgUrl ? (
+          {!isText && view !== 'preview' ? (
+            <div className="binary-note">
+              <b>Conteúdo binário</b>
+              <span>
+                {info.mime} · {formatBytes(res.body.byteLength)}
+              </span>
+              <span className="muted">{isPdf || isImage ? 'Veja em Preview ou salve o arquivo.' : 'Salve o arquivo para abrir em outro programa.'}</span>
+              <div className="binary-actions">
+                {(isPdf || isImage) && (
+                  <button className="btn small" onClick={() => setView('preview')}>
+                    Preview
+                  </button>
+                )}
+                <button className="btn small ghost" onClick={saveFile}>
+                  Save response to file
+                </button>
+              </div>
+            </div>
+          ) : isImage && blobUrl ? (
             <div className="img-preview">
-              <img src={imgUrl} alt="response" />
+              <img
+                src={blobUrl}
+                alt="response"
+                onLoad={(e) => setDims(`${e.currentTarget.naturalWidth}×${e.currentTarget.naturalHeight}`)}
+              />
+            </div>
+          ) : isPdf && blobUrl ? (
+            <iframe className="pdf-preview" title="PDF" src={blobUrl} />
+          ) : !isText ? (
+            <div className="binary-note">
+              <b>Sem pré-visualização para {info.mime}</b>
+              <span className="muted">{formatBytes(res.body.byteLength)}. Salve o arquivo para abrir em outro programa.</span>
+              <div className="binary-actions">
+                <button className="btn small" onClick={saveFile}>
+                  Save response to file
+                </button>
+              </div>
             </div>
           ) : view === 'preview' ? (
             <iframe className="preview" sandbox="" srcDoc={lang === 'html' ? text : `<pre>${escapeHtml(text)}</pre>`} />

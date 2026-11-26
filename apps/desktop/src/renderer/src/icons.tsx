@@ -1,3 +1,4 @@
+import type React from 'react'
 import type { ReactElement } from 'react'
 
 const p = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
@@ -94,9 +95,9 @@ const paths: Record<string, ReactElement> = {
   )
 }
 
-export function Icon({ name, size = 16 }: { name: keyof typeof paths | string; size?: number }) {
+export function Icon({ name, size = 16, style }: { name: keyof typeof paths | string; size?: number; style?: React.CSSProperties }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={style}>
       {paths[name] ?? null}
     </svg>
   )

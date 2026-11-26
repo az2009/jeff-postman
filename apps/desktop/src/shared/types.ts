@@ -261,6 +261,8 @@ export interface IpcContract {
   'runner:delete': { args: [runId: string]; ret: void }
   'runner:pickData': { args: []; ret: { name: string; columns: string[]; rows: Record<string, string>[] } | null }
   'runner:export': { args: [runId: string]; ret: string | null }
+  /** grava o corpo de uma resposta num arquivo escolhido pelo usuário; devolve o caminho */
+  'response:saveFile': { args: [body: Uint8Array, suggestedName: string]; ret: string | null }
   'settings:get': { args: []; ret: AppSettings }
   'settings:set': { args: [settings: AppSettings]; ret: AppSettings }
   'cookies:list': { args: []; ret: StoredCookie[] }
@@ -332,6 +334,7 @@ export const IPC_CHANNELS: IpcChannel[] = [
   'runner:delete',
   'runner:pickData',
   'runner:export',
+  'response:saveFile',
   'settings:get',
   'settings:set',
   'cookies:list',
@@ -513,6 +516,8 @@ export interface RunRequestResult {
   skipped: boolean
   /** corpo da resposta (até 64 KB), só com "Save responses" */
   responseBody?: string
+  /** corpo binário (PDF, imagem…) não é guardado: só o tipo e o tamanho */
+  responseBinary?: { mime: string; size: number }
   /** detalhe para o painel da direita no resultado do Runner */
   requestHeaders?: [string, string][]
   /** corpo enviado como texto (até 64 KB) */
