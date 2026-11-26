@@ -3,7 +3,7 @@
  * setNextRequest/skipRequest, parada no erro e gravação dos resultados. Não entra no histórico.
  */
 import { randomUUID } from 'node:crypto'
-import type { KeyValue, RequestDoc, RunConfig, RunnerEvent, RunRequestResult, RunSummary, TreeItem } from '@shared/types'
+import type { KeyValue, RequestDoc, RunConfig, RunnerEvent, RunRequestResult, RunSummary, ScriptsReport, TreeItem } from '@shared/types'
 import type { Repo } from './db'
 import { clean, executeRequest, type RunContext } from './execute'
 import { cancel } from './http'
@@ -157,6 +157,13 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
             error: r.ok ? scriptError : r.cancelled ? 'Parado' : r.skipped ? null : r.error,
             skipped: !r.ok && !!r.skipped
           }
+          res.at = Date.now()
+          if (report) {
+            const kept = limitLogs(report.logs)
+            if (kept.logs.length) res.logs = kept.logs
+            if (kept.truncated) res.logsTruncated = true
+            if (report.errors.length) res.scriptErrors = report.errors.slice(0, 50).map((x) => ({ ...x, error: x.error.slice(0, 4000) }))
+          }
           const sent = r.ok ? r.response.request : r.request
           if (sent) {
             res.requestHeaders = sent.headers
@@ -221,6 +228,23 @@ export function startRun(repo: Repo, cfg: RunConfig, appVersion: string, emit: (
     }
   })()
   return { ...summary }
+}
+
+const MAX_LOG_LINES = 200
+const MAX_LOG_CHARS = 32 * 1024
+
+/** Logs guardados por requisição no Runner: até 200 linhas e 32 KB de texto, para 1000 iterações não pesarem. */
+export function limitLogs(logs: ScriptsReport['logs']): { logs: ScriptsReport['logs']; truncated: boolean } {
+  const out: ScriptsReport['logs'] = []
+  let chars = 0
+  for (const l of logs) {
+    if (out.length >= MAX_LOG_LINES || chars >= MAX_LOG_CHARS) return { logs: out, truncated: true }
+    const room = MAX_LOG_CHARS - chars
+    const text = l.text.length > room ? `${l.text.slice(0, room)}… (cortado)` : l.text
+    chars += text.length
+    out.push({ ...l, text })
+  }
+  return { logs: out, truncated: false }
 }
 
 /** Intervalo entre requisições; o tempo pausado não conta. */

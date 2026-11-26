@@ -8,6 +8,8 @@ import { methodClass, useStore, type OpenTab } from '../store'
 import { prettyJson } from '../format'
 import { useResizableWidth } from '../resize'
 import { CodeEditor } from './CodeEditor'
+import { EntryConsole } from './ConsolePanel'
+import type { ConsoleEntry } from '../store'
 
 type OrderItem = { id: string; name: string; method: string; path: string; on: boolean }
 
@@ -506,6 +508,24 @@ function TestList({ tests }: { tests: RunRequestResult['tests'] }) {
   )
 }
 
+/** Resultado do Runner no formato de entrada do console (só a requisição; o corpo da resposta fica na aba Response). */
+function consoleEntryOf(x: RunRequestResult): ConsoleEntry {
+  return {
+    id: x.seq,
+    time: x.at ?? 0,
+    method: x.method,
+    url: x.url,
+    status: x.status,
+    timeMs: x.status !== null ? x.timeMs : null,
+    error: x.error,
+    logs: x.logs ?? [],
+    scriptErrors: x.scriptErrors ?? [],
+    response: null,
+    requestHeaders: x.requestHeaders,
+    requestBody: x.requestBody
+  }
+}
+
 function bodyLanguage(headers: [string, string][] | undefined, body: string): string {
   const ct = headers?.find(([k]) => k.toLowerCase() === 'content-type')?.[1].toLowerCase() ?? ''
   const t = body.trimStart()
@@ -517,9 +537,10 @@ function bodyLanguage(headers: [string, string][] | undefined, body: string): st
 
 /** Painel da direita: a requisição enviada e a resposta recebida, como no Runner do Postman. */
 function RunDetail({ x, onClose }: { x: RunRequestResult; onClose(): void }) {
-  const [tab, setTab] = useState<'response' | 'request' | 'tests'>(x.status === null ? 'request' : 'response')
+  const [tab, setTab] = useState<'response' | 'request' | 'tests' | 'console'>(x.status === null ? 'request' : 'response')
   const [sub, setSub] = useState<'body' | 'headers'>('body')
   const pass = x.tests.filter((t) => t.passed).length
+  const logCount = (x.logs?.length ?? 0) + (x.scriptErrors?.length ?? 0)
   const headers = tab === 'request' ? x.requestHeaders : x.responseHeaders
   const rawBody = tab === 'request' ? x.requestBody : x.responseBody
   const body = rawBody === undefined ? undefined : prettyJson(rawBody)
@@ -558,13 +579,19 @@ function RunDetail({ x, onClose }: { x: RunRequestResult; onClose(): void }) {
         )}
       </div>
       <div className="rdp-tabs">
-        {(['response', 'request', 'tests'] as const).map((t) => (
+        {(['response', 'request', 'tests', 'console'] as const).map((t) => (
           <button key={t} className={`rdp-tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-            {t === 'response' ? 'Response' : t === 'request' ? 'Request' : `Tests (${pass}/${x.tests.length})`}
+            {t === 'response'
+              ? 'Response'
+              : t === 'request'
+                ? 'Request'
+                : t === 'tests'
+                  ? `Tests (${pass}/${x.tests.length})`
+                  : `Console${logCount ? ` (${logCount})` : ''}`}
           </button>
         ))}
         <div className="spacer" />
-        {tab !== 'tests' && (
+        {(tab === 'response' || tab === 'request') && (
           <>
             <button className={`seg ${sub === 'body' ? 'active' : ''}`} onClick={() => setSub('body')}>
               Body
@@ -579,6 +606,14 @@ function RunDetail({ x, onClose }: { x: RunRequestResult; onClose(): void }) {
         {tab === 'tests' ? (
           <div className="rdp-tests">
             <TestList tests={x.tests} />
+          </div>
+        ) : tab === 'console' ? (
+          <div className="console-list rdp-console">
+            <EntryConsole
+              e={consoleEntryOf(x)}
+              emptyHint={x.logs || x.scriptErrors || x.at ? undefined : 'Sem logs registrados nesta execução (feita antes do Console no Runner).'}
+            />
+            {x.logsTruncated && <div className="console-empty">Logs cortados: o Runner guarda até 200 linhas e 32 KB por requisição.</div>}
           </div>
         ) : sub === 'headers' ? (
           headers && headers.length ? (

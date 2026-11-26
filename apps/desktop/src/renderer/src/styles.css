@@ -1365,3 +1365,13 @@ body.col-resizing iframe, body.col-resizing .code-editor { pointer-events: none;
 .palette-row.active { background: var(--bg-active); }
 .palette-label { white-space: nowrap; }
 .palette-detail { color: var(--text-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* aba Console da resposta e do Runner: só o envio daquela requisição */
+.res-console { border-top: 1px solid var(--border); }
+.entry-console { border-bottom: 0; }
+.entry-console-label { padding: 6px 12px 2px; color: var(--text-3); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-family: inherit; }
+.response-stack { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.response-stack > .response-empty, .response-stack > .response-error { flex: none; }
+.inline-console { display: flex; flex-direction: column; min-height: 120px; margin: 0 16px 16px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.inline-console-head { padding: 6px 12px; border-bottom: 1px solid var(--border); color: var(--text-2); font-weight: 600; font-size: 12px; }
+.rdp-console { margin: -8px; }

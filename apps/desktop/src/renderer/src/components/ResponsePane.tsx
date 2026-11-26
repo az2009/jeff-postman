@@ -9,8 +9,10 @@ import type { ScriptsReport } from '@shared/types'
 import { decodeText, languageFromContentType, prettyJson } from '../format'
 import { bodyInfo, dispositionFilename } from '@shared/binary'
 import { api } from '../api'
+import { EntryConsole, entryLogCount } from './ConsolePanel'
+import type { ConsoleEntry } from '../store'
 
-type ResTab = 'body' | 'cookies' | 'headers' | 'tests'
+type ResTab = 'body' | 'cookies' | 'headers' | 'tests' | 'console'
 type View = 'pretty' | 'raw' | 'preview'
 
 const PRETTY_LIMIT = 5 * 1024 * 1024
@@ -35,8 +37,11 @@ export function ResponsePane({ run }: { run: RunState | null }) {
     )
   if (run.state === 'skipped')
     return (
-      <div className="response-empty">
-        <p>Requisição pulada pelo pre-request script (pm.execution.skipRequest)</p>
+      <div className="response-stack">
+        <div className="response-empty">
+          <p>Requisição pulada pelo pre-request script (pm.execution.skipRequest)</p>
+        </div>
+        <InlineConsole entry={run.console} />
       </div>
     )
   if (run.state === 'cancelled')
@@ -47,26 +52,42 @@ export function ResponsePane({ run }: { run: RunState | null }) {
     )
   if (run.state === 'error')
     return (
-      <div className="response-error">
-        <h3>Could not send request</h3>
-        <p className="err-msg">
-          Error: {run.error}
-          {run.code ? <span className="err-code"> ({run.code})</span> : null}
-        </p>
-        {run.request && (
-          <p className="err-detail">
-            {run.request.method} {run.request.url}
+      <div className="response-stack">
+        <div className="response-error">
+          <h3>Could not send request</h3>
+          <p className="err-msg">
+            Error: {run.error}
+            {run.code ? <span className="err-code"> ({run.code})</span> : null}
           </p>
-        )}
-        <p className="err-hint">
-          {run.code === 'SCRIPT_ERROR' ? 'Corrija o script em Scripts → Pre-request (ou na collection/pasta).' : 'Confira a URL, a rede e se o servidor está no ar.'} Detalhes no Console (Ctrl+Alt+C).
-        </p>
+          {run.request && (
+            <p className="err-detail">
+              {run.request.method} {run.request.url}
+            </p>
+          )}
+          <p className="err-hint">
+            {run.code === 'SCRIPT_ERROR' ? 'Corrija o script em Scripts → Pre-request (ou na collection/pasta).' : 'Confira a URL, a rede e se o servidor está no ar.'} Os logs deste envio estão abaixo.
+          </p>
+        </div>
+        <InlineConsole entry={run.console} />
       </div>
     )
-  return <ResponseView res={run.response} />
+  return <ResponseView res={run.response} entry={run.console} />
 }
 
-function ResponseView({ res }: { res: HttpResponse }) {
+/** Console do envio que não teve resposta (erro ou pulado). */
+function InlineConsole({ entry }: { entry: ConsoleEntry | undefined }) {
+  if (!entry) return null
+  return (
+    <div className="inline-console">
+      <div className="inline-console-head">Console</div>
+      <div className="console-list">
+        <EntryConsole e={entry} />
+      </div>
+    </div>
+  )
+}
+
+function ResponseView({ res, entry }: { res: HttpResponse; entry?: ConsoleEntry }) {
   const [tab, setTab] = useState<ResTab>('body')
   const [view, setView] = useState<View>('pretty')
   const ct = res.headers.find(([k]) => k.toLowerCase() === 'content-type')?.[1]
@@ -122,7 +143,8 @@ function ResponseView({ res }: { res: HttpResponse }) {
               ['body', 'Body'],
               ['cookies', `Cookies${cookies.length ? ` (${cookies.length})` : ''}`],
               ['headers', `Headers (${res.headers.length})`],
-              ['tests', testLabel(res.scripts)]
+              ['tests', testLabel(res.scripts)],
+              ['console', `Console${entryLogCount(entry) ? ` (${entryLogCount(entry)})` : ''}`]
             ] as [ResTab, string][]
           ).map(([id, label]) => (
             <button key={id} className={`subtab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
@@ -263,6 +285,12 @@ function ResponseView({ res }: { res: HttpResponse }) {
       {tab === 'tests' && (
         <div className="res-scroll">
           <TestResults report={res.scripts} />
+        </div>
+      )}
+
+      {tab === 'console' && (
+        <div className="console-list res-console">
+          {entry ? <EntryConsole e={entry} /> : <div className="console-empty">Sem registro de console para este envio.</div>}
         </div>
       )}
     </div>

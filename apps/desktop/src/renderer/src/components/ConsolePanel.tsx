@@ -157,6 +157,57 @@ export function ConsolePanel() {
   )
 }
 
+/** Quantas linhas de log e erro de script uma entrada tem (para o contador da aba Console). */
+export function entryLogCount(e: ConsoleEntry | undefined): number {
+  return e ? e.logs.length + e.scriptErrors.length : 0
+}
+
+/**
+ * Uma entrada do console, sozinha: logs do pre-request, a linha da requisição (clique abre o detalhe),
+ * logs do post-response e erros de script. Usada na aba Console da resposta e do Runner.
+ */
+export function EntryConsole({ e, emptyHint }: { e: ConsoleEntry; emptyHint?: string }) {
+  const [open, setOpen] = useState(false)
+  const pre = e.logs.filter((l) => l.event === 'prerequest')
+  const post = e.logs.filter((l) => l.event === 'test')
+  return (
+    <div className="console-entry entry-console">
+      {pre.length > 0 && <div className="entry-console-label">Pre-request</div>}
+      {pre.map((l, i) => (
+        <LogLine key={`p${i}`} l={l} />
+      ))}
+      <div className={`console-line req clickable ${e.error ? 'lv-error' : ''}`} onClick={() => setOpen((o) => !o)}>
+        <span className={`row-caret ${open ? 'open' : ''}`}>
+          <Icon name="chevron" size={11} />
+        </span>
+        <span className={`console-method ${methodClass(e.method as never)}`}>{e.method}</span>
+        <span className="console-url" title={e.url}>
+          {e.url}
+        </span>
+        <span className="spacer" />
+        {e.status !== null && <span className={`console-status ${e.status >= 400 ? 'bad' : ''}`}>{e.status}</span>}
+        {e.timeMs !== null && <span className="console-time">{e.timeMs} ms</span>}
+        {e.error && <span className="console-status bad">{e.error}</span>}
+        {e.time > 0 && <span className="console-clock">{new Date(e.time).toLocaleTimeString('pt-BR')}</span>}
+      </div>
+      {open && <EntryDetail e={e} />}
+      {post.length > 0 && <div className="entry-console-label">Post-response</div>}
+      {post.map((l, i) => (
+        <LogLine key={`t${i}`} l={l} />
+      ))}
+      {e.scriptErrors.map((x, i) => (
+        <div key={`x${i}`} className="console-line lv-error">
+          <span className="console-src">{x.source}</span>
+          {x.error}
+        </div>
+      ))}
+      {pre.length + post.length + e.scriptErrors.length === 0 && (
+        <div className="console-empty">{emptyHint ?? 'Nenhum console.log nos scripts desta requisição.'}</div>
+      )}
+    </div>
+  )
+}
+
 function LogLine({ l }: { l: ConsoleEntry['logs'][number] }) {
   return (
     <div className={`console-line lv-${l.level}`}>

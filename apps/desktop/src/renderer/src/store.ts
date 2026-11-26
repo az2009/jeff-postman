@@ -77,12 +77,16 @@ export interface VarsTab {
 const sameScope = (a: VarScope, b: VarScope) =>
   a.type === b.type && (a.type === 'globals' || (a as { id: string }).id === (b as { id: string }).id)
 
-export type RunState =
+export type RunState = (
   | { state: 'loading'; requestId: string; startedAt: number }
   | { state: 'done'; requestId: string; response: HttpResponse }
   | { state: 'error'; requestId: string; error: string; code: string | null; request: SentRequest | null }
   | { state: 'cancelled'; requestId: string }
   | { state: 'skipped'; requestId: string }
+) & {
+  /** o que este envio mandou para o console (aba Console da resposta) */
+  console?: ConsoleEntry
+}
 
 interface State {
   theme: Theme
@@ -150,7 +154,7 @@ interface State {
   reloadScopes(): Promise<void>
   applyScriptUpdates(r: ScriptsReport): void
   consoleEntries: ConsoleEntry[]
-  logRun(tab: OpenTab, result: SendResult): void
+  logRun(tab: OpenTab, result: SendResult): ConsoleEntry
   clearConsole(): void
   closeImport(): void
   applyImport(results: ImportResult[]): Promise<void>
@@ -410,6 +414,7 @@ export const useStore = create<State>((set, get) => ({
       requestBody: result.ok ? undefined : (result.request?.bodyPreview ?? undefined)
     }
     set((s) => ({ consoleEntries: [...s.consoleEntries.slice(-999), entry] }))
+    return entry
   },
   clearConsole() {
     set({ consoleEntries: [] })
@@ -716,7 +721,9 @@ export const useStore = create<State>((set, get) => ({
     else setRun({ state: 'error', requestId, error: result.error, code: result.code, request: result.request })
     const report = result.ok ? result.response.scripts : result.scripts
     if (report) get().applyScriptUpdates(report)
-    get().logRun(tab, result)
+    const entry = get().logRun(tab, result)
+    // a aba Console da resposta mostra só o que este envio registrou
+    set((s) => ({ tabs: s.tabs.map((t) => (t.key === key && t.run?.requestId === requestId ? { ...t, run: { ...t.run, console: entry } } : t)) }))
     get().loadHistory().catch(() => undefined)
   },
   cancelActive() {

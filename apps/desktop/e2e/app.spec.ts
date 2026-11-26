@@ -136,7 +136,10 @@ test('Runner roda a collection importada com testes', async () => {
       },
       {
         name: 'Dois',
-        event: [{ listen: 'test', script: { exec: ['pm.test("caminho", () => pm.expect(pm.response.json().path).to.equal("/dois"))'] } }],
+        event: [
+          { listen: 'prerequest', script: { exec: ['console.log("antes-dois")'] } },
+          { listen: 'test', script: { exec: ['pm.test("caminho", () => pm.expect(pm.response.json().path).to.equal("/dois"))', 'console.warn("depois-dois", pm.info.iteration)'] } }
+        ],
         request: { method: 'GET', url: `${base}/dois` }
       }
     ]
@@ -165,11 +168,34 @@ test('Runner roda a collection importada com testes', async () => {
   await expect(side.locator('.rdp-headers')).toContainText('User-Agent')
   await side.locator('.rdp-tab', { hasText: 'Tests' }).click()
   await expect(side.locator('.tr-row')).toContainText('caminho')
+  // Console do detalhe: só os logs desta requisição
+  await side.locator('.rdp-tab', { hasText: 'Console (2)' }).click()
+  await expect(side.locator('.console-line.lv-log')).toContainText('antes-dois')
+  await expect(side.locator('.console-line.lv-warn')).toContainText('depois-dois 0')
+  await expect(side.locator('.console-line.req')).toContainText('/dois')
   await side.locator('.icon-btn[title="Fechar"]').click()
   await expect(side).toHaveCount(0)
+
+  // aba Console da requisição normal: logs do último envio
+  await page.locator('.tree .row', { hasText: 'Dois' }).click()
+  await page.locator('.send').click()
+  await expect(page.locator('.status')).toHaveText('200 OK')
+  await page.locator('.res-tabs .subtab', { hasText: 'Console (2)' }).click()
+  await expect(page.locator('.res-console .console-line.lv-log')).toHaveText(/antes-dois/)
+  await expect(page.locator('.res-console .console-line.lv-warn')).toHaveText(/depois-dois 0/)
+})
+
+test('envio com erro mostra o console do envio abaixo do erro', async () => {
+  await page.locator('.tab-add').click()
+  await urlInput().fill('http://127.0.0.1:1/fora')
+  await page.locator('.send').click()
+  await expect(page.locator('.response-error')).toBeVisible()
+  await expect(page.locator('.inline-console .console-line.req')).toContainText('127.0.0.1:1/fora')
+  await expect(page.locator('.inline-console .console-empty')).toContainText('Nenhum console.log')
 })
 
 test('Runner: Pause segura a execução e Resume continua', async () => {
+  await page.locator('.tab', { hasText: 'Runner' }).click()
   await page.locator('.btn', { hasText: 'New Run' }).click()
   const nums = page.locator('.rc-field input[type=number]')
   await nums.nth(0).fill('30')

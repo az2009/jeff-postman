@@ -524,6 +524,13 @@ export interface RunRequestResult {
   requestBody?: string
   responseHeaders?: [string, string][]
   httpVersion?: string
+  /** console.log e erros dos scripts desta requisição (aba Console do detalhe); limitado em linhas e tamanho */
+  logs?: ScriptsReport['logs']
+  scriptErrors?: ScriptsReport['errors']
+  /** os logs passaram do limite e foram cortados */
+  logsTruncated?: boolean
+  /** quando a requisição terminou (ms desde 1970) */
+  at?: number
 }
 
 export interface RunSummary {
